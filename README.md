@@ -1,7 +1,6 @@
 # ReaderAdapt-Liver
 
-**A self-adapting, radiologist-centred first-read agent for liver CT** - a working prototype built
-towards *AIMA 2026 · Project II · "A Self-Adapting, Radiologist-Centered AI Workflow for CT and MRI Screening"*.
+**A self-adapting, radiologist-centred first-read agent for liver CT** - a working prototype.
 
 > Research question of the project: *can an AI assistant adapt to the individual radiologist, rather than
 > offering the same support to every reader?*
