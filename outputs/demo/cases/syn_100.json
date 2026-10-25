@@ -1,0 +1,291 @@
+{
+  "case_id": "syn_100",
+  "split": "calib",
+  "source": "synthetic",
+  "review_status": "pending",
+  "geometry": {
+    "shape_on_disk": [
+      144,
+      144,
+      71
+    ],
+    "shape_view": [
+      71,
+      144,
+      144
+    ],
+    "spacing_mm": [
+      3.0,
+      2.61413,
+      2.61413
+    ],
+    "orientation_on_disk": [
+      "L",
+      "P",
+      "S"
+    ],
+    "canonical": "RAS+",
+    "view": "radiological axial: row 0 anterior, col 0 patient right"
+  },
+  "model": {
+    "backend": "voxel_gbm",
+    "version": "1.0",
+    "passes": 3,
+    "signature": "voxel_gbm:3320381:1e10c93a2378:128"
+  },
+  "measurements": {
+    "liver_found": true,
+    "liver_volume_ml": 1577.8,
+    "liver_mean_hu": 70.2,
+    "predicted_tumour_volume_ml": 4.182,
+    "tumour_burden_pct": 0.265,
+    "n_lesions": 6,
+    "largest_lesion_diameter_mm": 17.4,
+    "lesions": [
+      {
+        "id": 1,
+        "volume_ml": 1.148,
+        "max_axial_diameter_mm": 17.4,
+        "slice_range": [
+          14,
+          16
+        ],
+        "key_slice": 16,
+        "centroid_view": [
+          15.0,
+          80.8,
+          43.2
+        ],
+        "centroid_mm": [
+          45.1,
+          211.1,
+          112.9
+        ],
+        "mean_hu": 30.6,
+        "mean_probability": 0.607
+      },
+      {
+        "id": 2,
+        "volume_ml": 0.984,
+        "max_axial_diameter_mm": 19.1,
+        "slice_range": [
+          11,
+          14
+        ],
+        "key_slice": 11,
+        "centroid_view": [
+          12.2,
+          53.8,
+          64.2
+        ],
+        "centroid_mm": [
+          36.6,
+          140.7,
+          167.8
+        ],
+        "mean_hu": 19.1,
+        "mean_probability": 0.656
+      },
+      {
+        "id": 3,
+        "volume_ml": 0.656,
+        "max_axial_diameter_mm": 19.1,
+        "slice_range": [
+          9,
+          10
+        ],
+        "key_slice": 10,
+        "centroid_view": [
+          9.8,
+          73.9,
+          68.1
+        ],
+        "centroid_mm": [
+          29.5,
+          193.2,
+          178.1
+        ],
+        "mean_hu": 34.9,
+        "mean_probability": 0.563
+      },
+      {
+        "id": 4,
+        "volume_ml": 0.595,
+        "max_axial_diameter_mm": 16.7,
+        "slice_range": [
+          35,
+          36
+        ],
+        "key_slice": 35,
+        "centroid_view": [
+          35.3,
+          73.2,
+          40.4
+        ],
+        "centroid_mm": [
+          105.8,
+          191.3,
+          105.6
+        ],
+        "mean_hu": 100.6,
+        "mean_probability": 0.653
+      },
+      {
+        "id": 5,
+        "volume_ml": 0.431,
+        "max_axial_diameter_mm": 14.3,
+        "slice_range": [
+          18,
+          18
+        ],
+        "key_slice": 18,
+        "centroid_view": [
+          18.0,
+          81.0,
+          43.0
+        ],
+        "centroid_mm": [
+          54.0,
+          211.7,
+          112.4
+        ],
+        "mean_hu": 46.5,
+        "mean_probability": 0.785
+      },
+      {
+        "id": 6,
+        "volume_ml": 0.369,
+        "max_axial_diameter_mm": 14.3,
+        "slice_range": [
+          23,
+          23
+        ],
+        "key_slice": 23,
+        "centroid_view": [
+          23.0,
+          55.1,
+          60.9
+        ],
+        "centroid_mm": [
+          69.0,
+          144.1,
+          159.2
+        ],
+        "mean_hu": 45.3,
+        "mean_probability": 0.626
+      }
+    ],
+    "tumour_voxels_outside_liver_frac": 0.0119,
+    "tumour_volume_outside_liver_ml": 0.062,
+    "measured_at": "original resolution",
+    "voxel_spacing_mm": [
+      3.0,
+      2.6141,
+      2.6141
+    ]
+  },
+  "reference": {
+    "tumour_present": true,
+    "tumour_volume_ml": 0.103,
+    "liver_volume_ml": 1435.9,
+    "n_lesions": 1,
+    "largest_lesion_ml": 0.103,
+    "tumour_contrast_hu": -34.1,
+    "dice_liver": 0.9478,
+    "dice_tumour": 0.0,
+    "tumour_overlap_voxels": 0,
+    "lesions_detected": 0,
+    "fp_lesions": 6
+  },
+  "quality": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "liver_found",
+        "passed": true,
+        "value": true,
+        "expected": true,
+        "message": "a liver was segmented"
+      },
+      {
+        "name": "liver_volume_plausible",
+        "passed": true,
+        "value": 1577.8,
+        "expected": [
+          500.0,
+          4500.0
+        ],
+        "message": "liver volume 1578 ml"
+      },
+      {
+        "name": "voxel_spacing_plausible",
+        "passed": true,
+        "value": [
+          3.0,
+          2.614,
+          2.614
+        ],
+        "expected": [
+          0.3,
+          8.0
+        ],
+        "message": "voxel spacing within range"
+      },
+      {
+        "name": "enough_slices",
+        "passed": true,
+        "value": 71,
+        "expected": ">= 16",
+        "message": "71 axial slices"
+      },
+      {
+        "name": "tumour_inside_liver",
+        "passed": true,
+        "value": 0.0119,
+        "expected": "<= 0.25 (or < 1.0 ml)",
+        "message": "tumour predictions are confined to the liver"
+      }
+    ],
+    "failed_reasons": []
+  },
+  "confidence": {
+    "tumour_probability_raw": 0.86176,
+    "tumour_probability": 0.61891,
+    "pass_probabilities": [
+      0.7058,
+      0.6834,
+      0.7847
+    ],
+    "pass_std": 0.04342,
+    "uncertainty": 0.95881,
+    "uncertainty_level": "high",
+    "uncertainty_components": {
+      "predictive_entropy": 0.95881,
+      "expected_entropy": 0.84208,
+      "mutual_information": 0.00698
+    },
+    "calibrator": "Platt scaling (a = 1.005, b = -1.355)"
+  },
+  "triage": {
+    "priority": 0.6198,
+    "category": "SUSPICIOUS",
+    "threshold": 0.5,
+    "reasons": [
+      "p = 0.62 >= suggestion threshold 0.50"
+    ],
+    "components": {
+      "probability": 0.6189,
+      "volume_term": 0.4184,
+      "uncertainty": 0.9588
+    },
+    "rank": 8,
+    "of": 31
+  },
+  "report_path": "outputs/demo/reports/syn_100.txt",
+  "agent": {
+    "planner": "rule",
+    "status": "complete",
+    "n_steps": 8,
+    "guardrail_overrides": 0
+  }
+}

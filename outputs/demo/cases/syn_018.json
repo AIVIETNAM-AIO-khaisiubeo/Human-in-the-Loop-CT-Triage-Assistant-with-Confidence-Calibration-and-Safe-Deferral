@@ -1,0 +1,203 @@
+{
+  "case_id": "syn_018",
+  "split": "test",
+  "source": "synthetic",
+  "review_status": "pending",
+  "geometry": {
+    "shape_on_disk": [
+      144,
+      144,
+      52
+    ],
+    "shape_view": [
+      52,
+      144,
+      144
+    ],
+    "spacing_mm": [
+      4.0,
+      2.49743,
+      2.49743
+    ],
+    "orientation_on_disk": [
+      "L",
+      "P",
+      "S"
+    ],
+    "canonical": "RAS+",
+    "view": "radiological axial: row 0 anterior, col 0 patient right"
+  },
+  "model": {
+    "backend": "voxel_gbm",
+    "version": "1.0",
+    "passes": 3,
+    "signature": "voxel_gbm:3320381:1e10c93a2378:128"
+  },
+  "measurements": {
+    "liver_found": true,
+    "liver_volume_ml": 1692.9,
+    "liver_mean_hu": 62.1,
+    "predicted_tumour_volume_ml": 1.347,
+    "tumour_burden_pct": 0.08,
+    "n_lesions": 2,
+    "largest_lesion_diameter_mm": 20.5,
+    "lesions": [
+      {
+        "id": 1,
+        "volume_ml": 0.823,
+        "max_axial_diameter_mm": 20.5,
+        "slice_range": [
+          32,
+          33
+        ],
+        "key_slice": 33,
+        "centroid_view": [
+          33.0,
+          70.6,
+          43.2
+        ],
+        "centroid_mm": [
+          131.9,
+          176.3,
+          108.0
+        ],
+        "mean_hu": 44.3,
+        "mean_probability": 0.708
+      },
+      {
+        "id": 2,
+        "volume_ml": 0.524,
+        "max_axial_diameter_mm": 17.1,
+        "slice_range": [
+          26,
+          27
+        ],
+        "key_slice": 27,
+        "centroid_view": [
+          26.7,
+          75.0,
+          45.4
+        ],
+        "centroid_mm": [
+          106.7,
+          187.2,
+          113.5
+        ],
+        "mean_hu": 52.1,
+        "mean_probability": 0.662
+      }
+    ],
+    "tumour_voxels_outside_liver_frac": 0.0,
+    "tumour_volume_outside_liver_ml": 0.0,
+    "measured_at": "original resolution",
+    "voxel_spacing_mm": [
+      4.0,
+      2.4974,
+      2.4974
+    ]
+  },
+  "reference": {
+    "tumour_present": true,
+    "tumour_volume_ml": 6.836,
+    "liver_volume_ml": 1635.1,
+    "n_lesions": 1,
+    "largest_lesion_ml": 6.836,
+    "tumour_contrast_hu": -5.7,
+    "dice_liver": 0.9707,
+    "dice_tumour": 0.0,
+    "tumour_overlap_voxels": 0,
+    "lesions_detected": 0,
+    "fp_lesions": 2
+  },
+  "quality": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "liver_found",
+        "passed": true,
+        "value": true,
+        "expected": true,
+        "message": "a liver was segmented"
+      },
+      {
+        "name": "liver_volume_plausible",
+        "passed": true,
+        "value": 1692.9,
+        "expected": [
+          500.0,
+          4500.0
+        ],
+        "message": "liver volume 1693 ml"
+      },
+      {
+        "name": "voxel_spacing_plausible",
+        "passed": true,
+        "value": [
+          4.0,
+          2.497,
+          2.497
+        ],
+        "expected": [
+          0.3,
+          8.0
+        ],
+        "message": "voxel spacing within range"
+      },
+      {
+        "name": "enough_slices",
+        "passed": true,
+        "value": 52,
+        "expected": ">= 16",
+        "message": "52 axial slices"
+      },
+      {
+        "name": "tumour_inside_liver",
+        "passed": true,
+        "value": 0.0,
+        "expected": "<= 0.25 (or < 1.0 ml)",
+        "message": "tumour predictions are confined to the liver"
+      }
+    ],
+    "failed_reasons": []
+  },
+  "confidence": {
+    "tumour_probability_raw": 0.80381,
+    "tumour_probability": 0.51574,
+    "pass_probabilities": [
+      0.7167,
+      0.6815,
+      0.5403
+    ],
+    "pass_std": 0.07622,
+    "uncertainty": 0.99929,
+    "uncertainty_level": "high",
+    "uncertainty_components": {
+      "predictive_entropy": 0.99929,
+      "expected_entropy": 0.91935,
+      "mutual_information": 0.01812
+    },
+    "calibrator": "Platt scaling (a = 1.005, b = -1.355)"
+  },
+  "triage": {
+    "priority": 0.5136,
+    "category": "SUSPICIOUS",
+    "threshold": 0.5,
+    "reasons": [
+      "p = 0.52 >= suggestion threshold 0.50"
+    ],
+    "components": {
+      "probability": 0.5157,
+      "volume_term": 0.217,
+      "uncertainty": 0.9993
+    },
+    "rank": 20,
+    "of": 33
+  },
+  "report_path": "outputs/demo/reports/syn_018.txt",
+  "agent": {
+    "planner": "rule",
+    "status": "complete",
+    "n_steps": 8,
+    "guardrail_overrides": 0
+  }
+}
