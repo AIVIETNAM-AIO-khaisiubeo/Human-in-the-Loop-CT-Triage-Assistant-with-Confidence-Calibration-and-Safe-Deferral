@@ -14,7 +14,7 @@ independent read for readers (and cases) where its help would do more harm than 
 > ⚠️ **Research prototype - not for clinical use.** Public, de-identified data only. Simulated readers show that
 > the method behaves as designed; they are not evidence of clinical benefit.
 
----
+
 
 ## Contents
 1. [What is in the box](#1-what-is-in-the-box)
@@ -27,7 +27,7 @@ independent read for readers (and cases) where its help would do more harm than 
 8. [Repository layout, tests](#8-repository-layout-and-tests)
 9. [Limitations and next steps](#9-limitations-and-next-steps)
 
----
+
 
 ## 1. What is in the box
 
@@ -42,7 +42,7 @@ independent read for readers (and cases) where its help would do more harm than 
 | **Aim 3 - evaluation** | Synthetic readers A (over-reliant), B (sceptical), C (inconsistent); universal vs reader-specific vs deferral policies on the same held-out cases; RQ1-RQ3 analyses | `radagent/experiments.py`, `notebooks/evaluation.ipynb` |
 | Reading interface | Streamlit app: worklist, CT viewer with overlays + uncertainty, sequential reading protocol, accept/edit/reject, report, live policy adaptation, evaluation, agent trace | `app/streamlit_app.py` |
 
----
+
 
 ## 2. Architecture
 
@@ -133,8 +133,6 @@ packages the run folder for the app.
 Locally afterwards: unzip the downloaded run into `outputs/` and
 `streamlit run app/streamlit_app.py -- --run outputs/lits_vitunetr`.
 
----
-
 ## 5. Five-minute walkthrough
 
 1. **Worklist** tab - cases ranked by the agent (🔴 urgent, 🟠 suspicious, 🟣 uncertain, 🟢 likely normal,
@@ -152,8 +150,6 @@ Locally afterwards: unzip the downloaded run into `outputs/` and
 
 Turn on *Research mode* in the sidebar to overlay the reference annotation and label each decision as a correct
 acceptance, harmful acceptance, correct or wrong rejection.
-
----
 
 ## 6. Methods
 
@@ -229,8 +225,6 @@ numbers), 30 seeds. Learning curves repeat the fit with the first *n* feedback e
 | Deferral rate | share of cases where the suggestion was withheld |
 | Harmful-acceptance rate | accepted an incorrect AI suggestion (per case); *over-reliance* = per incorrect suggestion shown |
 | Review actions per case | burden proxy: accept 1, reject 2, edit 3, independent read 4 |
-
----
 
 ## 7. Results of the demo run
 
@@ -310,8 +304,6 @@ What the simulation shows:
 More figures in `outputs/demo/figures/`: `benefit_by_reader.png` (RQ1), `risk_coverage.png`, `triage_lift.png`,
 `segmentation_quality.png`.
 
----
-
 ## 8. Repository layout and tests
 
 ```
@@ -340,8 +332,6 @@ tests/           unit tests (geometry, calibration, policies, readers, agent gua
 ```bash
 pip install -r requirements-dev.txt && pytest -q
 ```
-
----
 
 ## 9. Limitations and next steps
 
