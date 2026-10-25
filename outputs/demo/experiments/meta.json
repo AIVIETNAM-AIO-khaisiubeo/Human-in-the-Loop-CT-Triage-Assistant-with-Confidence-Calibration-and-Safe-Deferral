@@ -1,0 +1,11 @@
+{
+  "n_calib": 31,
+  "n_test": 33,
+  "seeds": 30,
+  "readers": [
+    "reader_a",
+    "reader_b",
+    "reader_c"
+  ],
+  "test_positives": 15
+}
