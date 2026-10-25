@@ -359,8 +359,3 @@ pip install -r requirements-dev.txt && pytest -q
 * Next: MRI (e.g. CHAOS / AMOS), lesion-level deferral, a VLM-assisted report with retrieval of the measured
   values only, and reading-time logging in the UI for the pilot.
 
-### References (from the AIMA project description)
-Yu et al., *Nature Medicine* 2024 · Agarwal et al., NBER w31422, 2023 · Dratsch et al., *Radiology* 2023 ·
-Prinster et al., *Radiology* 2024 · Dvijotham et al. (CoDoC), *Nature Medicine* 2023 · Tanno et al.,
-*Nature Medicine* 2025 · Fallahpour et al. (MedRAX), ICML 2025 · Bilic et al., *The Liver Tumor Segmentation
-Benchmark (LiTS)*, *Medical Image Analysis* 2023.
