@@ -1,0 +1,355 @@
+"""Generate the two notebooks from source (keeps them reviewable as Python).
+
+    python tools/make_notebooks.py
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def md(s):
+    return {"cell_type": "markdown", "metadata": {}, "source": s.strip("\n").splitlines(keepends=True)}
+
+
+def code(s):
+    return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+            "source": s.strip("\n").splitlines(keepends=True)}
+
+
+def nb(cells, colab=False):
+    meta = {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python"}}
+    if colab:
+        meta["accelerator"] = "GPU"
+        meta["colab"] = {"gpuType": "T4", "provenance": []}
+    return {"cells": cells, "metadata": meta, "nbformat": 4, "nbformat_minor": 5}
+
+
+EVAL = [
+    md("""
+# ReaderAdapt-Liver - reproducible evaluation
+
+This notebook re-computes every number of the evaluation from a finished run directory
+(`outputs/<run>/`, produced by `python -m radagent all --config ...`). It covers:
+
+| Section | Guidance step | Question |
+|---|---|---|
+| 1 | Data | What was evaluated, with which patient-level split? |
+| 2 | Step 1 | How good are segmentation and measurement? |
+| 3 | Step 2 | Is the case-level confidence calibrated (Brier, ECE, reliability)? |
+| 4 | Step 2/4 | Does uncertainty identify AI errors (selective prediction)? |
+| 5 | Step 3 | Does the triage order surface tumour cases first? |
+| 6 | Step 4/5 | Universal vs reader-specific vs deferral policies with simulated readers (RQ1-RQ3) |
+| 7 | Agent | What did the agent actually do? |
+
+> **Research prototype.** Simulated readers show that the method behaves as designed; they are *not*
+> evidence of clinical benefit or of reading-time savings.
+
+Set `RUN` below to the run you want to evaluate (the committed outputs were produced with
+`configs/demo.yaml`: synthetic phantoms + the CPU voxel-GBM segmenter).
+"""),
+    code("""
+import json, sys
+from pathlib import Path
+import numpy as np, pandas as pd
+import matplotlib.pyplot as plt
+
+ROOT = Path.cwd().parent if Path.cwd().name == "notebooks" else Path.cwd()
+sys.path.insert(0, str(ROOT))
+from radagent.store import RunStore, load_json
+from radagent.config import load_config
+from radagent import plots
+from radagent.experiments import run_reader_experiment, POLICY_LABELS, benefit_by_reader
+
+RUN = ROOT / "outputs" / "demo"          # <- change to outputs/lits_vitunetr after the LiTS run
+store = RunStore(RUN)
+cfg = load_config(RUN / "config_used.yaml")
+records = store.records()
+test = [r for r in records if r["split"] == "test"]
+calib = [r for r in records if r["split"] == "calib"]
+pd.set_option("display.precision", 3)
+print(f"run: {RUN.name} | source: {cfg['data']['source']} | segmenter: {cfg['segmenter']['backend']} | "
+      f"records: {len(records)} (calib {len(calib)}, test {len(test)})")
+"""),
+    md("## 1. Data and splits\nSplits are by patient/case; the calibrator and reader policies never see a test case."),
+    code("""
+man = store.manifest()
+split_counts = man.groupby("split").size().reindex(["train", "val", "calib", "test"])
+pos = {s: int(sum(r["reference"]["tumour_present"] for r in records if r["split"] == s)) for s in ("calib", "test")}
+pd.DataFrame({"cases": split_counts,
+              "with tumour (reference)": pd.Series(pos)}).fillna("-")
+"""),
+    md("""
+## 2. Segmentation and measurement (Step 1)
+Dice is computed at the **original resolution** against the reference masks. Volumes use the voxel spacing
+from each NIfTI header. One case record looks like this (the structured output of the agent's first read):
+"""),
+    code("""
+ex = next(r for r in test if r["reference"]["tumour_present"])
+{k: ex["confidence"][k] for k in ("tumour_probability_raw", "tumour_probability", "uncertainty")} | {
+    "case_id": ex["case_id"], "predicted_tumour_volume_ml": ex["measurements"]["predicted_tumour_volume_ml"],
+    "n_lesions": ex["measurements"]["n_lesions"], "triage": ex["triage"]["category"], "review_status": ex["review_status"]}
+"""),
+    code("""
+seg = pd.DataFrame([{"case": r["case_id"], "tumour_present": r["reference"]["tumour_present"],
+                     "dice_liver": r["reference"]["dice_liver"], "dice_tumour": r["reference"]["dice_tumour"],
+                     "pred_tumour_ml": r["measurements"]["predicted_tumour_volume_ml"],
+                     "ref_tumour_ml": r["reference"]["tumour_volume_ml"],
+                     "pred_liver_ml": r["measurements"]["liver_volume_ml"], "ref_liver_ml": r["reference"]["liver_volume_ml"],
+                     "ref_lesions": r["reference"]["n_lesions"], "detected": r["reference"]["lesions_detected"],
+                     "fp_lesions": r["reference"]["fp_lesions"]} for r in test])
+posc = seg[seg.tumour_present]
+summary = pd.Series({
+    "liver Dice (mean)": seg.dice_liver.mean(),
+    "liver volume error (median |%|)": (100 * (seg.pred_liver_ml - seg.ref_liver_ml).abs() / seg.ref_liver_ml).median(),
+    "tumour Dice, cases with tumour (mean)": posc.dice_tumour.mean(),
+    "tumour Dice, cases with tumour (median)": posc.dice_tumour.median(),
+    "lesion-level sensitivity": posc.detected.sum() / max(1, posc.ref_lesions.sum()),
+    "false-positive lesions per case": seg.fp_lesions.mean(),
+})
+summary.to_frame("test split")
+"""),
+    code("""
+fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
+plots.style()
+axes[0].scatter(seg.ref_liver_ml, seg.pred_liver_ml, color=plots.SERIES[0], edgecolor=plots.SURFACE, s=40)
+lim = [seg[["ref_liver_ml", "pred_liver_ml"]].min().min() * 0.95, seg[["ref_liver_ml", "pred_liver_ml"]].max().max() * 1.05]
+axes[0].plot(lim, lim, color=plots.AXIS, lw=1); axes[0].set_xlabel("Reference liver volume (ml)"); axes[0].set_ylabel("Predicted (ml)")
+axes[0].set_title("Liver volume", loc="left")
+axes[1].scatter(seg.ref_tumour_ml + 0.01, seg.pred_tumour_ml + 0.01, color=plots.SERIES[0], edgecolor=plots.SURFACE, s=40)
+axes[1].set_xscale("log"); axes[1].set_yscale("log")
+axes[1].plot([0.01, 100], [0.01, 100], color=plots.AXIS, lw=1)
+axes[1].set_xlabel("Reference tumour volume + 0.01 (ml)"); axes[1].set_ylabel("Predicted + 0.01 (ml)")
+axes[1].set_title("Tumour volume (log scale)", loc="left")
+plt.tight_layout()
+"""),
+    md("""
+## 3. Confidence calibration (Step 2)
+The raw case score (mean of the top-k smoothed tumour probabilities inside the liver, k = 0.1 ml) is mapped to a
+probability on the **calibration split**. Temperature scaling, Platt scaling and no calibration are compared by
+5-fold cross-validated NLL on the calibration split only; the winner is refitted on the full calibration split
+and evaluated once on the test split. Intervals are 95 % bootstrap intervals over test cases.
+"""),
+    code("""
+cm = load_json(RUN / "calibration" / "calibration_metrics.json")
+print("calibrator:", cm["calibrator"]["description"], "| selection:", cm["fit"].get("cv_nll"))
+rows = []
+for stage in ("before", "after"):
+    m = cm["test"][stage]
+    rows.append({"stage": "raw score" if stage == "before" else "calibrated", "n": m["n"], "positives": m["n_pos"],
+                 "Brier": m["brier"], "Brier 95% CI": f"{m['brier_ci'][0]:.3f}-{m['brier_ci'][1]:.3f}",
+                 "ECE": m["ece"], "ECE 95% CI": f"{m['ece_ci'][0]:.3f}-{m['ece_ci'][1]:.3f}",
+                 "ECE (equal-mass)": m["ece_adaptive"], "NLL": m["nll"], "AUROC": m["auroc"]})
+pd.DataFrame(rows).set_index("stage")
+"""),
+    code("""
+plots.reliability_figure(cm, RUN / "figures" / "calibration_reliability.png")
+plt.imshow(plt.imread(RUN / "figures" / "calibration_reliability.png")); plt.axis("off"); plt.gcf().set_size_inches(10, 7)
+"""),
+    md("""
+Calibration changes *what a probability means*, not the ranking: AUROC is unchanged by temperature scaling and
+by Platt scaling with a positive slope. With few test cases the ECE interval is wide - the bootstrap interval is
+reported so the improvement is not over-read.
+
+## 4. Does uncertainty point at the AI's mistakes? (selective prediction)
+"""),
+    code("""
+from sklearn.metrics import roc_auc_score
+t = cfg["triage"]["suggest_threshold"]
+p = np.array([r["confidence"]["tumour_probability"] for r in test])
+u = np.array([r["confidence"]["uncertainty"] for r in test])
+g = np.array([int(r["reference"]["tumour_present"]) for r in test])
+ai = (p >= t).astype(int)
+err = (ai != g).astype(int)
+out = {"AI-alone accuracy": (ai == g).mean(), "sensitivity": ai[g == 1].mean(), "specificity": 1 - ai[g == 0].mean(),
+       "AUROC of uncertainty for AI error": roc_auc_score(err, u) if 0 < err.sum() < len(err) else np.nan,
+       "error rate, most certain 50%": err[np.argsort(u)[: len(u) // 2]].mean(),
+       "error rate, least certain 50%": err[np.argsort(u)[len(u) // 2:]].mean()}
+pd.Series(out).to_frame("test split")
+"""),
+    code("""
+plots.risk_coverage_figure(records, RUN / "figures" / "risk_coverage.png", t)
+plt.imshow(plt.imread(RUN / "figures" / "risk_coverage.png")); plt.axis("off"); plt.gcf().set_size_inches(7, 4.6)
+"""),
+    md("## 5. Worklist triage (Step 3)"),
+    code("""
+pr = np.array([r["triage"]["priority"] for r in test])
+order = np.argsort(-pr)
+k = max(1, len(test) // 4)
+cats = pd.Series([r["triage"]["category"] for r in test]).value_counts()
+print("triage categories on the test worklist:", cats.to_dict())
+pd.Series({"tumour prevalence": g.mean(), f"tumour rate in the top {k} cases": g[order[:k]].mean(),
+           f"tumour rate in the bottom {k} cases": g[order[-k:]].mean()}).to_frame("test split")
+"""),
+    code("""
+plots.triage_lift_figure(records, RUN / "figures" / "triage_lift.png")
+plt.imshow(plt.imread(RUN / "figures" / "triage_lift.png")); plt.axis("off"); plt.gcf().set_size_inches(7, 4.6)
+"""),
+    md("""
+## 6. Reader adaptation and deferral (Steps 4-5)
+Re-run the controlled experiment here (deterministic seeds - it reproduces `experiments/*.csv`).
+
+* **Burn-in:** each simulated reader reads the calibration cases with the universal policy (sequential protocol).
+* **Fit:** reader-specific threshold / deferral from that reader's feedback (trust curve + lapse rate); a pooled
+  deferral rule for `Universal + deferral`.
+* **Evaluate:** all policies on the same test cases with the same random draws.
+Correctness always comes from the reference annotation.
+"""),
+    code("""
+exp = run_reader_experiment(records, cfg, verbose=False)
+s = exp["summary"].copy()
+s["policy"] = s["policy"].map(POLICY_LABELS)
+cols = ["reader", "policy", "accuracy", "sensitivity", "specificity", "weighted_error", "harmful_acceptance_rate",
+        "over_reliance", "deferral_rate", "actions_per_case", "threshold", "personalised_frac"]
+s[cols]
+"""),
+    code("""
+plots.policy_comparison_figure(exp["summary"], cfg, RUN / "figures" / "policy_comparison.png")
+plt.imshow(plt.imread(RUN / "figures" / "policy_comparison.png")); plt.axis("off"); plt.gcf().set_size_inches(12, 8)
+"""),
+    md("### RQ1 - Does per-reader adaptation reduce the variation in benefit across readers?"),
+    code("""
+b = exp["benefit_spread"].copy(); b["policy"] = b["policy"].map(POLICY_LABELS); b
+"""),
+    code("""
+plots.benefit_figure(exp["results"], cfg, RUN / "figures" / "benefit_by_reader.png")
+plt.imshow(plt.imread(RUN / "figures" / "benefit_by_reader.png")); plt.axis("off"); plt.gcf().set_size_inches(10, 5)
+"""),
+    md("### RQ2 - Does learning to defer reduce the harm caused by incorrect suggestions?"),
+    code("""
+r = exp["summary"]
+piv = r.pivot_table(index="reader", columns="policy", values="harmful_acceptance_rate", observed=False)
+piv = piv[[c for c in ["universal", "universal_defer", "reader_threshold", "reader_threshold_defer"] if c in piv]]
+piv.columns = [POLICY_LABELS[c] for c in piv.columns]
+piv.round(4)
+"""),
+    md("### RQ3 - How much feedback is needed, and is the learned policy stable?"),
+    code("""
+lc = exp["learning_curve"]
+tab = lc.groupby(["reader", "n_feedback"]).agg(weighted_error=("weighted_error", "mean"),
+                                              threshold=("threshold", "mean"),
+                                              threshold_sd=("threshold", "std"),
+                                              personalised=("personalised", "mean")).round(3)
+tab.unstack(0)
+"""),
+    code("""
+plots.learning_curve_figure(lc, exp["results"], cfg, RUN / "figures" / "learning_curve.png")
+plt.imshow(plt.imread(RUN / "figures" / "learning_curve.png")); plt.axis("off"); plt.gcf().set_size_inches(13, 7)
+"""),
+    md("## 7. What did the agent do?\nEvery first read is a traced plan of tool calls with preconditions enforced by the runner."),
+    code("""
+steps = []
+for f in sorted((RUN / "traces").glob("*.json")):
+    tr = json.loads(f.read_text())
+    for s_ in tr["steps"]:
+        steps.append({"case": tr["case_id"], "planner": tr["planner"], "tool": s_["tool"], "ms": s_.get("duration_ms", 0),
+                      "override": bool(s_.get("guardrail"))})
+steps = pd.DataFrame(steps)
+print(f"{steps.case.nunique()} traces, planner(s): {steps.planner.unique().tolist()}, guardrail overrides: {int(steps.override.sum())}")
+steps.groupby("tool", sort=False).agg(calls=("ms", "size"), median_ms=("ms", "median")).round(1)
+"""),
+    md("""
+## Limitations
+* **Synthetic demo.** The committed run uses procedurally generated phantoms and a classical CPU segmenter so that
+  everything runs without a GPU; its absolute numbers say nothing about real CT. Re-run with
+  `configs/lits_vitunetr.yaml` for LiTS results.
+* **LiTS case-level imbalance.** Most LiTS volumes contain tumour, so case-level specificity and calibration of the
+  negative class rest on few cases; report intervals, and consider `confidence.target_min_tumour_ml` for an
+  "actionable burden" definition.
+* **Simulated readers** follow a parametric behaviour model (own read -> trust curve -> lapses). Real readers will
+  differ - the next step is the pilot with mentor radiologists.
+* **Small calibration/burn-in sets** (25-35 cases) make learned thresholds noisy; the policy therefore only
+  personalises when the expected improvement clears a margin, and the learning curve shows how this stabilises.
+"""),
+]
+
+COLAB = [
+    md("""
+# ReaderAdapt-Liver on LiTS17 with the ViT-UNETR 2.5D (Colab, GPU)
+
+Runtime -> Change runtime type -> **GPU**. Same Kaggle token setup as the ViT-UNETR notebook
+(Secrets: `KAGGLE_API_TOKEN`, notebook access on).
+
+Pipeline: download LiTS -> leakage-safe split -> train the 3-class ViT-UNETR (optionally warm-started from your
+2-class liver checkpoint) -> agentic first read on 51 held-out cases -> calibration -> reader experiment -> figures.
+At the end, download the run folder and open it with the Streamlit app on your laptop.
+"""),
+    code("""
+# 1. Get the code (replace with your GitHub URL once pushed; or upload the zip and unzip it)
+REPO_URL = "https://github.com/<your-user>/readeradapt-liver.git"
+import os
+if not os.path.exists("readeradapt-liver"):
+    if os.path.exists("readeradapt-liver.zip"):
+        !unzip -q readeradapt-liver.zip
+    else:
+        !git clone -q $REPO_URL
+%cd readeradapt-liver
+!pip install -q -r requirements.txt -r requirements-deep.txt kagglehub
+"""),
+    code("""
+import torch
+print(torch.__version__, "| CUDA:", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "")
+"""),
+    code("""
+# 2. LiTS from Kaggle (two datasets: part 1 = masks + volumes pt1-5, part 2 = remaining volumes)
+import kagglehub
+part1 = kagglehub.dataset_download("andrewmvd/liver-tumor-segmentation")
+part2 = kagglehub.dataset_download("andrewmvd/liver-tumor-segmentation-part-2")
+print(part1, part2, sep="\\n")
+"""),
+    md("""
+### Optional warm start from your 2-class liver model
+In the ViT-UNETR notebook, after training, run
+```python
+torch.save(model.state_dict(), "vitunetr_liver_2class.pt")
+```
+and upload the file here (or copy it from Drive) as `checkpoints/vitunetr_liver_2class.pt`. Every tensor except the
+2-class head is reused; the head is re-initialised for 3 classes. The split below reproduces that notebook's split,
+so the checkpoint has never seen a calibration or test case.
+"""),
+    code("""
+# 3. Write the run config with the real data paths
+import yaml, os
+cfg = yaml.safe_load(open("configs/lits_vitunetr.yaml"))
+cfg["data"]["lits_dirs"] = [part1, part2]
+warm = "checkpoints/vitunetr_liver_2class.pt"
+cfg["segmenter"]["init_from"] = warm if os.path.exists(warm) else None
+yaml.safe_dump(cfg, open("configs/lits_colab.yaml", "w"), sort_keys=False)
+print("warm start:", cfg["segmenter"]["init_from"])
+"""),
+    code("!python -m radagent data --config configs/lits_colab.yaml"),
+    code("# 4. Train the 3-class ViT-UNETR (~40-60 min on an A100 for 30 epochs; fewer epochs for a first look)\n!python -m radagent train --config configs/lits_colab.yaml"),
+    code("# 5. Agent perception tools on the 51 held-out cases (segmentation with flip-TTA x MC-dropout, measurement)\n!python -m radagent infer --config configs/lits_colab.yaml"),
+    code("!python -m radagent calibrate --config configs/lits_colab.yaml\n!python -m radagent first-read --config configs/lits_colab.yaml"),
+    code("!python -m radagent simulate --config configs/lits_colab.yaml\n!python -m radagent figures --config configs/lits_colab.yaml"),
+    code("""
+# 6. Look at one agent trace
+!python -m radagent agent --config configs/lits_colab.yaml
+"""),
+    code("""
+# 7. Package the run (without the training-slice cache) and download it
+!cd outputs && zip -qr ../lits_vitunetr_run.zip lits_vitunetr -x "lits_vitunetr/cache/train_slices/*"
+from google.colab import files
+files.download("lits_vitunetr_run.zip")
+"""),
+    md("""
+On your laptop: unzip into `readeradapt-liver/outputs/` and run
+`streamlit run app/streamlit_app.py -- --run outputs/lits_vitunetr`, then set `RUN` in
+`notebooks/evaluation.ipynb` to that folder to regenerate the evaluation.
+"""),
+]
+
+
+def main():
+    out = ROOT / "notebooks"
+    out.mkdir(exist_ok=True)
+    (out / "evaluation.ipynb").write_text(json.dumps(nb(EVAL), indent=1))
+    (out / "colab_lits_pipeline.ipynb").write_text(json.dumps(nb(COLAB, colab=True), indent=1))
+    print("wrote notebooks/evaluation.ipynb and notebooks/colab_lits_pipeline.ipynb")
+
+
+if __name__ == "__main__":
+    main()
