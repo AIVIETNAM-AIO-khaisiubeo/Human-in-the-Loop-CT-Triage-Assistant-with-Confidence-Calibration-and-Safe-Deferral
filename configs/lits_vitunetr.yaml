@@ -1,0 +1,46 @@
+# Real data: LiTS17 + the ViT-UNETR 2.5D (3 classes) - run on a GPU (Colab A100/T4/L4).
+# See notebooks/colab_lits_pipeline.ipynb, which fills in data.lits_dirs for you.
+run_name: lits_vitunetr
+seed: 13
+
+data:
+  source: lits
+  lits_dirs: []          # the two kagglehub folders (part 1 with masks + volumes 1-5, part 2)
+  # Reproduce the ViT-UNETR notebook split (RandomState(42), 80-case training pool) so that
+  # warm-starting from that notebook's checkpoint cannot leak calibration/test cases.
+  split_strategy: notebook_compatible
+  calib_fraction_of_heldout: 0.5   # the notebook's 51 held-out cases -> 26 calib + 25 test
+
+preprocess:
+  hu_window: [-100, 250]
+  img_size: 256
+  margin_slices: 15
+
+segmenter:
+  backend: vitunetr
+  vit_name: vit_small_patch16_224.augreg_in21k_ft_in1k
+  pretrained: true
+  init_from: null        # e.g. checkpoints/vitunetr_liver_2class.pt saved from the notebook
+  decoder_dropout: 0.1
+  epochs: 30
+  batch_size: 16
+  lr_encoder: 1.0e-4
+  lr_decoder: 5.0e-4
+  class_weights: [1.0, 1.0, 3.0]
+  tumour_oversample: 3.0
+  num_workers: 2
+
+inference:
+  tta_flip: true
+  mc_samples: 2          # 2 MC-dropout samples x 2 flip views = 4 passes
+  batch_size: 32
+  min_lesion_ml: 0.1
+  viewer_size: 192
+  viewer_max_slices: 80
+
+quality:
+  liver_ml_range: [400.0, 5000.0]
+
+readers:
+  seeds: 30
+  learning_curve_n: [0, 5, 10, 15, 20, 26]
