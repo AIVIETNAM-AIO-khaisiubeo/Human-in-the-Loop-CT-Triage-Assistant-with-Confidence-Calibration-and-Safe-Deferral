@@ -1,0 +1,28 @@
+RESEARCH PREDICTION - NOT FOR CLINICAL USE
+==========================================
+Study: syn_096   |   Source: synthetic   |   Exam: CT abdomen, axial
+Geometry: [144, 144, 57] voxels on disk (LPS), spacing 2.52 x 2.52 x 4.00 mm (col x row x slice)
+AI tools: segmenter voxel_gbm v1.0 (3 stochastic passes); confidence Platt scaling (a = 1.005, b = -1.355)
+
+QUALITY CONTROL
+  Passed.
+
+AI FIRST READ (measured values)
+  Liver: segmented; volume 1662 ml; mean attenuation 54 HU.
+  Focal liver lesions (AI): 4 candidate(s); total volume 19.3 ml (1.16% of liver volume).
+    1. 15.9 ml, max axial diameter 43 mm, slices 24-29, mean 23 HU, mean model probability 0.77
+    2. 2.4 ml, max axial diameter 23 mm, slices 16-18, mean 21 HU, mean model probability 0.59
+    3. 533 mm3, max axial diameter 14 mm, slices 32-33, mean 25 HU, mean model probability 0.67
+    4. 431 mm3, max axial diameter 14 mm, slices 30-30, mean 29 HU, mean model probability 0.74
+  Case-level tumour probability (calibrated): 0.94  [raw score 0.98]
+  Uncertainty: 0.34 bits (low); model disagreement across 3 passes 0.01 bits
+  Triage: URGENT (priority 0.80, rank 1/31).
+
+AI SUGGESTION
+  Liver tumour suspected (threshold 0.50).
+
+RADIOLOGIST REVIEW
+  Pending.
+
+All values above are automatic research measurements from a public, de-identified dataset;
+they have not been validated for clinical use. The radiologist is responsible for every finding.
