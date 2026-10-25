@@ -31,7 +31,7 @@ independent read for readers (and cases) where its help would do more harm than 
 
 ## 1. What is in the box
 
-| AIMA aim | Component | Where |
+| | Component | Where |
 |---|---|---|
 | **Aim 1 - agentic first read** | Planner (deterministic rules **or an open LLM** through any OpenAI-compatible server, e.g. Ollama) that calls guarded tools: load study → segment → measure → QC → calibrated confidence → triage → reader policy → report | `radagent/agent/` |
 | | Segmentation tools behind one interface: **ViT-UNETR 2.5D** (my liver model, extended to liver + tumour), a 2.5D U-Net, and a CPU voxel-GBM baseline | `radagent/models/` |
