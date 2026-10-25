@@ -1,0 +1,110 @@
+{
+  "case_id": "syn_073",
+  "geometry": {
+    "shape_on_disk": [
+      144,
+      144,
+      48
+    ],
+    "shape_view": [
+      48,
+      144,
+      144
+    ],
+    "spacing_mm": [
+      4.0,
+      2.4347,
+      2.4347
+    ],
+    "orientation_on_disk": [
+      "L",
+      "P",
+      "S"
+    ],
+    "canonical": "RAS+",
+    "view": "radiological axial: row 0 anterior, col 0 patient right"
+  },
+  "segmentation": {
+    "found_liver": true,
+    "z_range": [
+      0,
+      42
+    ],
+    "img_size": 128,
+    "n_passes": 3,
+    "k_voxels": 4,
+    "tumour_score_raw": 0.72897,
+    "pass_scores_raw": [
+      0.74015,
+      0.83354,
+      0.67919
+    ],
+    "timings_s": {
+      "preprocess": 0.01,
+      "localise": 2.73,
+      "infer": 5.84,
+      "postprocess": 0.14
+    }
+  },
+  "model": {
+    "backend": "voxel_gbm",
+    "version": "1.0",
+    "passes": 3,
+    "signature": "voxel_gbm:3320381:1e10c93a2378:128"
+  },
+  "reference": {
+    "tumour_present": true,
+    "tumour_volume_ml": 1.02,
+    "liver_volume_ml": 1656.6,
+    "n_lesions": 2,
+    "largest_lesion_ml": 0.806,
+    "tumour_contrast_hu": -19.5,
+    "dice_liver": 0.9634,
+    "dice_tumour": 0.0,
+    "tumour_overlap_voxels": 0,
+    "lesions_detected": 0,
+    "fp_lesions": 1
+  },
+  "measurements": {
+    "liver_found": true,
+    "liver_volume_ml": 1717.2,
+    "liver_mean_hu": 62.2,
+    "predicted_tumour_volume_ml": 0.403,
+    "tumour_burden_pct": 0.023,
+    "n_lesions": 1,
+    "largest_lesion_diameter_mm": 14.6,
+    "lesions": [
+      {
+        "id": 1,
+        "volume_ml": 0.403,
+        "max_axial_diameter_mm": 14.6,
+        "slice_range": [
+          11,
+          11
+        ],
+        "key_slice": 11,
+        "centroid_view": [
+          11.0,
+          82.8,
+          47.1
+        ],
+        "centroid_mm": [
+          44.0,
+          201.5,
+          114.7
+        ],
+        "mean_hu": 31.2,
+        "mean_probability": 0.687
+      }
+    ],
+    "tumour_voxels_outside_liver_frac": 0.0,
+    "tumour_volume_outside_liver_ml": 0.0,
+    "measured_at": "original resolution",
+    "voxel_spacing_mm": [
+      4.0,
+      2.4347,
+      2.4347
+    ]
+  },
+  "model_signature": "voxel_gbm:3320381:1e10c93a2378:128"
+}

@@ -1,0 +1,108 @@
+{
+  "case_id": "syn_032",
+  "geometry": {
+    "shape_on_disk": [
+      144,
+      144,
+      49
+    ],
+    "shape_view": [
+      49,
+      144,
+      144
+    ],
+    "spacing_mm": [
+      4.0,
+      2.34149,
+      2.34149
+    ],
+    "orientation_on_disk": [
+      "L",
+      "P",
+      "S"
+    ],
+    "canonical": "RAS+",
+    "view": "radiological axial: row 0 anterior, col 0 patient right"
+  },
+  "segmentation": {
+    "found_liver": true,
+    "z_range": [
+      1,
+      42
+    ],
+    "img_size": 128,
+    "n_passes": 3,
+    "k_voxels": 4,
+    "tumour_score_raw": 0.69217,
+    "pass_scores_raw": [
+      0.76363,
+      0.89307,
+      0.62212
+    ],
+    "timings_s": {
+      "preprocess": 0.01,
+      "localise": 3.46,
+      "infer": 6.7,
+      "postprocess": 0.17
+    }
+  },
+  "model": {
+    "backend": "voxel_gbm",
+    "version": "1.0",
+    "passes": 3,
+    "signature": "voxel_gbm:3320381:1e10c93a2378:128"
+  },
+  "reference": {
+    "tumour_present": false,
+    "tumour_volume_ml": 0.0,
+    "liver_volume_ml": 1303.9,
+    "n_lesions": 0,
+    "dice_liver": 0.9577,
+    "dice_tumour": 0.0,
+    "tumour_overlap_voxels": 0,
+    "lesions_detected": 0,
+    "fp_lesions": 1
+  },
+  "measurements": {
+    "liver_found": true,
+    "liver_volume_ml": 1400.4,
+    "liver_mean_hu": 66.2,
+    "predicted_tumour_volume_ml": 0.526,
+    "tumour_burden_pct": 0.038,
+    "n_lesions": 1,
+    "largest_lesion_diameter_mm": 15.0,
+    "lesions": [
+      {
+        "id": 1,
+        "volume_ml": 0.526,
+        "max_axial_diameter_mm": 15.0,
+        "slice_range": [
+          24,
+          24
+        ],
+        "key_slice": 24,
+        "centroid_view": [
+          24.0,
+          54.9,
+          63.3
+        ],
+        "centroid_mm": [
+          96.0,
+          128.5,
+          148.3
+        ],
+        "mean_hu": 40.9,
+        "mean_probability": 0.662
+      }
+    ],
+    "tumour_voxels_outside_liver_frac": 0.0,
+    "tumour_volume_outside_liver_ml": 0.0,
+    "measured_at": "original resolution",
+    "voxel_spacing_mm": [
+      4.0,
+      2.3415,
+      2.3415
+    ]
+  },
+  "model_signature": "voxel_gbm:3320381:1e10c93a2378:128"
+}

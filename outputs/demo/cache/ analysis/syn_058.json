@@ -1,0 +1,240 @@
+{
+  "case_id": "syn_058",
+  "geometry": {
+    "shape_on_disk": [
+      144,
+      144,
+      49
+    ],
+    "shape_view": [
+      49,
+      144,
+      144
+    ],
+    "spacing_mm": [
+      4.0,
+      2.52893,
+      2.52893
+    ],
+    "orientation_on_disk": [
+      "L",
+      "P",
+      "S"
+    ],
+    "canonical": "RAS+",
+    "view": "radiological axial: row 0 anterior, col 0 patient right"
+  },
+  "segmentation": {
+    "found_liver": true,
+    "z_range": [
+      1,
+      40
+    ],
+    "img_size": 128,
+    "n_passes": 3,
+    "k_voxels": 4,
+    "tumour_score_raw": 0.79984,
+    "pass_scores_raw": [
+      0.83324,
+      0.87572,
+      0.8559
+    ],
+    "timings_s": {
+      "preprocess": 0.01,
+      "localise": 2.68,
+      "infer": 5.84,
+      "postprocess": 0.14
+    }
+  },
+  "model": {
+    "backend": "voxel_gbm",
+    "version": "1.0",
+    "passes": 3,
+    "signature": "voxel_gbm:3320381:1e10c93a2378:128"
+  },
+  "reference": {
+    "tumour_present": false,
+    "tumour_volume_ml": 0.0,
+    "liver_volume_ml": 1821.9,
+    "n_lesions": 0,
+    "dice_liver": 0.9657,
+    "dice_tumour": 0.0,
+    "tumour_overlap_voxels": 0,
+    "lesions_detected": 0,
+    "fp_lesions": 7
+  },
+  "measurements": {
+    "liver_found": true,
+    "liver_volume_ml": 1903.9,
+    "liver_mean_hu": 66.3,
+    "predicted_tumour_volume_ml": 2.712,
+    "tumour_burden_pct": 0.142,
+    "n_lesions": 7,
+    "largest_lesion_diameter_mm": 18.7,
+    "lesions": [
+      {
+        "id": 1,
+        "volume_ml": 1.023,
+        "max_axial_diameter_mm": 18.7,
+        "slice_range": [
+          26,
+          28
+        ],
+        "key_slice": 27,
+        "centroid_view": [
+          27.2,
+          72.5,
+          39.7
+        ],
+        "centroid_mm": [
+          108.8,
+          183.2,
+          100.3
+        ],
+        "mean_hu": 61.2,
+        "mean_probability": 0.679
+      },
+      {
+        "id": 2,
+        "volume_ml": 0.588,
+        "max_axial_diameter_mm": 13.8,
+        "slice_range": [
+          21,
+          22
+        ],
+        "key_slice": 22,
+        "centroid_view": [
+          21.7,
+          65.2,
+          61.0
+        ],
+        "centroid_mm": [
+          86.8,
+          164.9,
+          154.2
+        ],
+        "mean_hu": 48.1,
+        "mean_probability": 0.633
+      },
+      {
+        "id": 3,
+        "volume_ml": 0.358,
+        "max_axial_diameter_mm": 13.0,
+        "slice_range": [
+          25,
+          26
+        ],
+        "key_slice": 25,
+        "centroid_view": [
+          25.2,
+          73.8,
+          62.1
+        ],
+        "centroid_mm": [
+          100.9,
+          186.6,
+          157.2
+        ],
+        "mean_hu": 47.1,
+        "mean_probability": 0.745
+      },
+      {
+        "id": 4,
+        "volume_ml": 0.358,
+        "max_axial_diameter_mm": 11.6,
+        "slice_range": [
+          27,
+          27
+        ],
+        "key_slice": 27,
+        "centroid_view": [
+          27.0,
+          84.5,
+          40.3
+        ],
+        "centroid_mm": [
+          108.0,
+          213.7,
+          101.9
+        ],
+        "mean_hu": 44.3,
+        "mean_probability": 0.68
+      },
+      {
+        "id": 5,
+        "volume_ml": 0.153,
+        "max_axial_diameter_mm": 8.2,
+        "slice_range": [
+          16,
+          16
+        ],
+        "key_slice": 16,
+        "centroid_view": [
+          16.0,
+          69.5,
+          57.0
+        ],
+        "centroid_mm": [
+          64.0,
+          175.8,
+          144.1
+        ],
+        "mean_hu": 58.2,
+        "mean_probability": 0.632
+      },
+      {
+        "id": 6,
+        "volume_ml": 0.128,
+        "max_axial_diameter_mm": 8.2,
+        "slice_range": [
+          25,
+          25
+        ],
+        "key_slice": 25,
+        "centroid_view": [
+          25.0,
+          70.8,
+          35.4
+        ],
+        "centroid_mm": [
+          100.0,
+          179.0,
+          89.5
+        ],
+        "mean_hu": 55.0,
+        "mean_probability": 0.651
+      },
+      {
+        "id": 7,
+        "volume_ml": 0.102,
+        "max_axial_diameter_mm": 6.1,
+        "slice_range": [
+          13,
+          13
+        ],
+        "key_slice": 13,
+        "centroid_view": [
+          13.0,
+          66.5,
+          34.5
+        ],
+        "centroid_mm": [
+          52.0,
+          168.2,
+          87.2
+        ],
+        "mean_hu": 53.2,
+        "mean_probability": 0.653
+      }
+    ],
+    "tumour_voxels_outside_liver_frac": 0.0,
+    "tumour_volume_outside_liver_ml": 0.0,
+    "measured_at": "original resolution",
+    "voxel_spacing_mm": [
+      4.0,
+      2.5289,
+      2.5289
+    ]
+  },
+  "model_signature": "voxel_gbm:3320381:1e10c93a2378:128"
+}
