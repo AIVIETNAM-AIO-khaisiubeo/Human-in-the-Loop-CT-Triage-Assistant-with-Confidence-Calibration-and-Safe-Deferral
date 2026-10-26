@@ -1,9 +1,14 @@
-"""Tests for the reading interface (app/): HTML building blocks and the full Streamlit app.
+"""Tests for the reading interface (app/): wording helpers, HTML components and the full Streamlit app.
 
 The app tests drive the real Streamlit script with ``streamlit.testing.v1.AppTest`` against a small
-run built from LiTS-layout test CTs with stand-in models (no GPU, no download). They walk the
-radiologist journey: worklist -> open case -> independent impression -> AI suggestion -> decision ->
-next case / report, plus every other view, the simulated readers and the compact worklist.
+run built from LiTS-layout test CTs with stand-in models (no GPU, no download). They check the
+safety rules of the design review as behaviour, not just looks:
+
+* blind first read: no AI output (prediction, %, disagreement, AI priority) for unread cases, arrival order;
+* the AI evidence opens only after a saved impression, and is shown next to it;
+* every decision is stored with the recommendation on screen, session, policy and model-set versions;
+* the decision policy is frozen for the session and changes only by an explicit, logged action;
+* QC failures withhold the AI output and are explained; "defer" records no final finding.
 
 Run:  pytest -q tests/test_app.py
 """
@@ -14,6 +19,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,56 +30,96 @@ import ui_core as U  # noqa: E402
 import ui_theme as T  # noqa: E402
 
 
-# --------------------------------------------------------------------------- HTML building blocks
-def test_badges_are_shape_word_and_colour_coded():
-    seen = set()
-    for cat, (mod, label, ico) in T.CATEGORY_STYLE.items():
-        h = T.badge(cat)
-        assert f"ra-{mod}" in h and label in h and "<svg" in h and 'aria-hidden="true"' in h
-        seen.add(ico)
-    assert len(seen) == len(T.CATEGORY_STYLE)          # every category has its own shape
-
-
-def test_dynamic_text_is_escaped():
-    h = T.case_card_main("<script>x</script>", "a & b", "p < q")
-    assert "<script>" not in h and "&lt;script&gt;" in h and "a &amp; b" in h
-    assert "&lt;b&gt;" in T.header("<b>", "pol", "research", "run")
-    assert "<b>" not in T.withheld_card("<b>", "x")
-
-
-def test_stepper_meter_and_flow():
-    s = T.stepper(3, {1, 2})
-    assert s.count("ra-step-done") == 2 and 'aria-current="step"' in s and "ra-step-todo" in s
-    m = T.meter(1.7, 0.5)
-    assert "width:100.0%" in m and "left:50.0%" in m and "threshold 0.50" in m
-    assert "width:0.0%" in T.meter(float("nan"))
-    f = T.flow([("A", "a", "data"), ("B", "b", "human")])
-    assert f.count("<li") == 2 and "ra-flow-human" in f
-
-
-def test_palette_meets_wcag_aa():
+# --------------------------------------------------------------------------- wording and components
+def _ratio(a, b):
     def lum(h):
-        r, g, b = (int(h.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        r, g, b_ = (int(h.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4))
         f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4  # noqa: E731
-        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b_)
 
-    def ratio(a, b):
-        hi, lo = sorted([lum(a), lum(b)], reverse=True)
-        return (hi + 0.05) / (lo + 0.05)
+    hi, lo = sorted([lum(a), lum(b)], reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
 
-    pairs = [(T.NAVY, "#FFFFFF"), (T.INK, "#FFFFFF"), (T.MUTED, "#FFFFFF"), (T.MUTED, T.SURFACE),
-             ("#FFFFFF", T.TEAL), (T.TEAL_DARK, T.TEAL_TINT), (T.TEAL_SOFT, T.NAVY),
-             ("#B42318", "#FEF3F2"), ("#B54708", "#FFF6E5"), ("#5B3CC4", "#F3F1FF"), ("#067647", "#ECF8F1"),
-             ("#1D4E89", "#EAF1FA"), ("#344054", "#EEF1F4")]
+
+def test_semantic_palette_meets_wcag_aa():
+    pairs = [(T.NAVY, "#FFFFFF"), (T.INK, "#FFFFFF"), (T.SLATE, "#FFFFFF"), (T.SLATE, T.SURFACE),
+             (T.SLATE, T.SLATE_BG), ("#FFFFFF", T.TEAL), (T.TEAL_DARK, T.TEAL_TINT), (T.RED, T.RED_BG),
+             (T.AMBER, T.AMBER_BG), (T.AMBER, "#FFFFFF"), ("#7A2E0E", T.AMBER_BG), ("#DCE6F2", T.NAVY),
+             ("#FDE7B0", T.NAVY), ("#D7E1EC", T.VIEWER_BG), ("#E6EDF5", "#132540")]
     for fg, bg in pairs:
-        assert ratio(fg, bg) >= 4.5, (fg, bg, ratio(fg, bg))
+        assert _ratio(fg, bg) >= 4.5, (fg, bg, round(_ratio(fg, bg), 2))
 
 
-def test_worklist_helpers():
+def test_overlays_visible_on_ct_and_distinct():
+    rgb = {k: np.array(v, float) for k, v in T.OVERLAY.items() if k in ("liver", "lesion", "uncertainty")}
+    hexes = {k: "#%02X%02X%02X" % tuple(int(x) for x in v) for k, v in rgb.items()}
+    for k, h in hexes.items():
+        assert _ratio(h, "#000000") >= 7.0, k                     # visible on the dark CT background / air
+    keys = list(rgb)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            assert np.linalg.norm(rgb[keys[i]] - rgb[keys[j]]) > 120, (keys[i], keys[j])
+
+
+def test_badges_codes_and_escaping():
+    shapes = {v[2] for v in T.CATEGORY_STYLE.values() if v[1] != "AI withheld (QC)"}
+    assert len(shapes) == len(T.CATEGORY_STYLE) - 1              # distinct shapes (withheld kinds share a family)
+    for cat, (_, label, _) in T.CATEGORY_STYLE.items():
+        h = T.badge(cat)
+        assert label in h and "<svg" in h and 'aria-hidden="true"' in h
+    assert "AI:" in T.badge("SUSPICIOUS")                        # AI outputs are labelled as such
+    assert "&lt;b&gt;" in T.header("<b>", "S-1", "M-1", None)
+    assert "&lt;script&gt;" in T.withheld_card("<script>", "") and T.esc("a & b") == "a &amp; b"
+    assert "&lt;i&gt;" in T.comparison(1, "<i>", 0, "x")
+
+
+def test_stepper_meter_measures():
+    s = T.stepper(3, {1, 2})
+    assert s.count("ra-step-done") == 2 and 'aria-current="step"' in s and "Reconcile and decide" in s
+    assert "width:100.0%" in T.meter(1.7, 0.5) and "threshold 50%" in T.meter(0.2, 0.5)
+    assert T.measures([("Liver volume", "1500", "mL")]).count("<dt>") == 1
+
+
+def test_clinical_wording_helpers():
     assert U.humanize("p = 0.72 >= suggestion threshold 0.50") == "Probability 0.72 ≥ suggestion threshold 0.50"
-    assert U.neighbours(["a", "b", "c"], "b") == ("a", "c")
-    assert U.neighbours(["a", "b", "c"], "a") == (None, "b")
-    assert U.neighbours(["a"], "z") == (None, "a")
+    assert U.neighbours(["a", "b", "c"], "b") == ("a", "c") and U.neighbours(["a"], "z") == (None, "a")
+    assert U.pct(0.734) == "73%"
+    a = U.agreement(0.73, 0.91)
+    assert a["kind"] == "differ" and "73% vs 91%" in a["text"]           # same class, different scores
+    assert U.agreement(0.72, 0.29)["kind"] == "disagree"
+    assert U.agreement(0.70, 0.78)["kind"] == "agree"
+    assert U.agreement(0.70, None)["kind"] == "none"
+    assert "0.84 on a 0-1 scale" in U.uncertainty_phrase(0.84)
+    rec = {"quality": {"passed": False, "checks": [{"name": "tumour_inside_liver", "passed": False,
+                                                    "message": "43% (167 ml) of tumour-class voxels fall outside"}]}}
+    q = U.qc_status(rec)
+    assert q["label"] == "Segmentation QC failed" and "withheld" in q["consequence"] and "43%" in q["detail"]
+    rec["quality"]["checks"].append({"name": "enough_slices", "passed": False, "message": "12 axial slices"})
+    assert U.qc_status(rec)["label"] == "Image QC failed"
+    assert U.qc_status({"quality": {"passed": True}})["kind"] == "ok"
+
+
+def test_viewer_rendering_window_zoom_markers():
+    lo, hi = U.window_to_u8(350, 75, (-100, 250))
+    assert abs(lo) < 1e-6 and abs(hi - 255) < 1e-6
+    arrs = {"ct": np.full((3, 64, 64), 100, np.uint8), "liver": np.zeros((3, 64, 64), np.uint8),
+            "lesions": np.zeros((3, 64, 64), np.uint8), "entropy": np.zeros((3, 64, 64), np.uint8), "z": np.arange(3)}
+    arrs["lesions"][1, 20:30, 20:30] = 1
+    plain = U.render_slice(arrs, 1, upscale=2)
+    zoomed = U.render_slice(arrs, 1, upscale=2, zoom=2.0, markers=True)
+    assert plain.shape == zoomed.shape == (128, 128, 3) and not np.array_equal(plain, zoomed)
+    no_fill = U.render_slice(arrs, 1, upscale=1, lesion_alpha=0.0, show_liver=False)
+    filled = U.render_slice(arrs, 1, upscale=1, lesion_alpha=0.5, show_liver=False)
+    assert tuple(no_fill[25, 25]) == tuple(no_fill[0, 0]) and tuple(filled[25, 25]) != tuple(filled[0, 0])
+    assert U.neutral_slice_index(arrs) == 1
+
+
+def test_blind_order_ignores_ai_priority():
+    import pandas as pd
+
+    wl = pd.DataFrame({"case_id": ["lits_009", "lits_002", "lits_005"], "rank": [1, 2, 3], "arrival": [9, 2, 5]})
+    assert list(U.order_worklist(wl, blind=True).case_id) == ["lits_002", "lits_005", "lits_009"]
+    assert list(U.order_worklist(wl, blind=False).case_id) == ["lits_009", "lits_002", "lits_005"]
 
 
 # --------------------------------------------------------------------------- the Streamlit app
@@ -104,11 +150,10 @@ def run_dir(tmp_path_factory):
 def app(run_dir, monkeypatch):
     monkeypatch.setenv("RA_RUN", str(run_dir))
     monkeypatch.chdir(ROOT)
-    for sub in ("feedback",):
-        d = run_dir / sub
-        if d.exists():
-            for f in d.glob("*"):
-                f.unlink()
+    d = run_dir / "feedback"
+    if d.exists():
+        for f in d.glob("*"):
+            f.unlink()
     at = st_testing.AppTest.from_file(str(ROOT / "app" / "streamlit_app.py"), default_timeout=120)
     at.run()
     assert not at.exception, at.exception
@@ -120,7 +165,11 @@ def _md(at) -> str:
 
 
 def _records(run_dir: Path) -> dict:
-    return {json.loads(f.read_text())["case_id"]: json.loads(f.read_text()) for f in (run_dir / "cases").glob("*.json")}
+    out = {}
+    for f in (run_dir / "cases").glob("*.json"):
+        r = json.loads(f.read_text())
+        out[r["case_id"]] = r
+    return out
 
 
 def _events(run_dir: Path, reader: str = "live") -> list:
@@ -129,89 +178,144 @@ def _events(run_dir: Path, reader: str = "live") -> list:
     return FeedbackStore(run_dir / "feedback").events(reader)
 
 
-def test_worklist_first(app):
-    assert app.session_state["view"] == "worklist"
+def _order(at) -> list:
+    return [b.key[5:] for b in at.button if b.key and b.key.startswith("open_")]
+
+
+def test_blind_worklist_shows_no_ai_output(app, run_dir):
+    assert app.session_state["view"] == "worklist" and app.session_state["reading_mode"] == "blind"
     md = _md(app)
-    assert "ReaderAdapt · Liver CT" in md and "Research prototype" in md and "To read" in md
-    opens = [b for b in app.button if b.key and b.key.startswith("open_")]
-    assert opens and sum(b.proto.type == "primary" for b in opens) == 1     # one clear next action
+    assert "Hidden until your impression" in md and "AI triage hidden" in md
+    status = next(m.value for m in app.markdown if "ra-statusline" in m.value)
+    assert "AI tools disagree" not in status and "Urgent" not in status
+    ai_cells = [m.value for m in app.markdown if '<span class="ra-cell-l">AI</span>' in m.value]
+    assert ai_cells and all("Hidden until your impression" in v and "%" not in v for v in ai_cells)
+    order = _order(app)
+    assert order == sorted(order, key=lambda c: int(c.split("_")[1]))      # arrival order, not AI priority
+    assert sum(app.button(key=f"open_{c}").proto.type == "primary" for c in order) == 1
 
 
-def test_read_journey_impression_ai_decision_next(app, run_dir):
+def test_blind_journey_impression_reveal_decide(app, run_dir):
     recs = _records(run_dir)
-    order = [b.key[5:] for b in app.button if b.key and b.key.startswith("open_")]
-    cid = next(c for c in order if recs[c]["quality"]["passed"])
+    cid = next(c for c in _order(app) if recs[c]["quality"]["passed"])
     app.button(key=f"open_{cid}").click().run()
     assert app.session_state["view"] == "read" and app.session_state["case"] == cid
-    assert "Your independent impression" in _md(app) and 'class="ra-ai ' not in _md(app)
+    md = _md(app)
+    assert "Independent read" in md and 'class="ra-ai"' not in md and '<span class="ra-pn">2</span>AI evidence' not in md
+    assert all(t.disabled for t in app.toggle if t.key in ("ov_liver", "ov_lesions", "ov_unc"))
     app.segmented_control(key=f"imp_{cid}").set_value("present").run()
     app.button(key="record_imp").click().run()
-    assert not app.exception and 'class="ra-ai ' in _md(app)            # AI suggestion revealed
-    app.button(key="accept").click().run()
-    ev = _events(run_dir)
-    assert len(ev) == 1 and ev[0]["case_id"] == cid and ev[0]["action"] == "accept" and ev[0]["initial_read"] == 1
+    md = _md(app)
+    assert not app.exception and 'class="ra-ai"' in md and "Your impression" in md and "Patient-level probability" in md
+    app.segmented_control(key=f"final_{cid}").set_value("present").run()
+    app.button(key="save_decision").click().run()
+    ev = _events(run_dir)[-1]
+    assert ev["case_id"] == cid and ev["initial_read"] == 1 and ev["final_label"] == 1
+    assert ev["action"] in ("accept", "reject") and ev["recommendation"]["text"]
+    assert ev["session_id"].startswith("S-") and ev["policy_version"].startswith("P-") \
+        and ev["model_version"].startswith("M-") and ev["impression_at"]
     assert "Decision saved" in _md(app)
-    nxt = app.button(key="after_next")
-    if not nxt.disabled:
-        nxt.click().run()
-        assert app.session_state["case"] != cid and app.session_state["view"] == "read"
-    app.segmented_control(key="nav").set_value("report").run()
-    assert not app.exception and any("RESEARCH PREDICTION" in c.value for c in app.code)
+    app.button(key="after_report").click().run()
+    assert app.session_state["view"] == "report" and any("AI recommendation shown" in c.value for c in app.code)
 
 
-def test_independent_read_and_edit_paths(app, run_dir):
+def test_qc_failure_and_defer(app, run_dir):
     recs = _records(run_dir)
-    order = [b.key[5:] for b in app.button if b.key and b.key.startswith("open_")]
+    order = _order(app)
     qc_fail = [c for c in order if not recs[c]["quality"]["passed"]]
-    if qc_fail:                                     # AI suggestion withheld -> independent read
+    if qc_fail:
         app.button(key=f"open_{qc_fail[0]}").click().run()
-        assert "AI suggestion withheld" in _md(app)
-        app.segmented_control(key=f"fin_{qc_fail[0]}").set_value("absent").run()
-        app.button(key="save_manual").click().run()
+        md = _md(app)
+        assert "AI output withheld" in md and "What it means" in md and "independent read" in md
+        app.segmented_control(key=f"final_{qc_fail[0]}").set_value("absent").run()
+        app.button(key="save_decision").click().run()
         assert _events(run_dir)[-1]["action"] == "manual"
     ok = [c for c in order if recs[c]["quality"]["passed"]]
     app.session_state["case"], app.session_state["view"] = ok[-1], "read"
-    app.toggle(key="sequential").set_value(False).run()
-    app.segmented_control(key=f"pres_{ok[-1]}").set_value("no").run()
-    app.button(key="save_edit").click().run()
-    assert _events(run_dir)[-1]["case_id"] == ok[-1] and _events(run_dir)[-1]["action"] in ("edit", "reject")
+    app.run()
+    app.segmented_control(key=f"imp_{ok[-1]}").set_value("absent").run()
+    app.button(key="record_imp").click().run()
+    app.segmented_control(key=f"final_{ok[-1]}").set_value("defer").run()
+    app.button(key="save_decision").click().run()
+    ev = _events(run_dir)[-1]
+    assert ev["action"] == "defer" and ev["final_label"] is None
+    app.segmented_control(key="nav").set_value("worklist").run()
+    assert "Deferred · second opinion" in _md(app)
 
 
-def test_every_view_renders_for_every_reader(app):
-    for reader in ("live", "reader_a"):
-        app.selectbox(key="reader").set_value(reader).run()
-        for view in ("worklist", "read", "report", "adapt", "perf", "audit", "about"):
-            app.segmented_control(key="nav").set_value(view).run()
-            assert not app.exception, (reader, view, app.exception)
-            assert app.session_state["view"] == view
-    app.segmented_control(key="nav").set_value(None).run()             # deselecting keeps the page
-    assert app.session_state["view"] == "about" and not app.exception
+def test_report_and_audit_stay_closed_before_impression(app, run_dir):
+    cid = _order(app)[0]
+    app.session_state["case"], app.session_state["view"] = cid, "report"
+    app.run()
+    assert "available after you save your independent impression" in _md(app) and not app.code
+    app.button(key="go_audit").click().run()
+    assert app.session_state["view"] == "audit" and "opens after your impression" in _md(app)
 
 
-def test_simulated_reader_and_adaptation(app, run_dir):
+def test_policy_frozen_until_explicitly_applied(app, run_dir):
     app.selectbox(key="reader").set_value("reader_b").run()
-    app.segmented_control(key="nav").set_value("read").run()
-    cid = app.session_state["case"]
-    app.button(key=f"sim_{cid}").click().run()
-    assert not app.exception and len(_events(run_dir, "reader_b")) == 1
-    app.number_input(key="nmore").set_value(3).run()
+    key = next(k for k in app.session_state["active_policies"] if k.startswith("reader_b|"))
+    before = U.policy_version(app.session_state["active_policies"][key]["policy"])
+    app.button(key="go_adapt").click().run()
+    app.number_input(key="nmore").set_value(6).run()
     app.button(key="simn").click().run()
-    assert not app.exception and len(_events(run_dir, "reader_b")) >= 2
-    app.segmented_control(key="nav").set_value("adapt").run()
-    assert not app.exception and "How the assistant adapts" in _md(app)
+    n_sim = len(_events(run_dir, "reader_b"))
+    assert not app.exception and 1 <= n_sim <= 6
+    assert U.policy_version(app.session_state["active_policies"][key]["policy"]) == before   # no silent change
+    btn = app.button(key="apply_policy")
+    if not btn.disabled:
+        btn.click().run()
+        log = (run_dir / "feedback" / "policy_changes.jsonl").read_text().splitlines()
+        assert json.loads(log[-1])["from"] == before
     app.button(key="reset_confirm").click().run()
     assert _events(run_dir, "reader_b") == []
 
 
-def test_compact_worklist_and_filters(app):
-    app.segmented_control(key="wl_filter").set_value("reviewed").run()
+def test_assisted_mode_and_every_view(app):
+    app.radio(key="reading_mode").set_value("assisted").run()
+    md = _md(app)
+    assert "AI-assisted triage" in md and "AI tools disagree" in md and "%" in md
+    app.selectbox(key="wl_sort").set_value("arrival").run()
+    assert not app.exception
+    for reader in ("live", "reader_a"):
+        app.selectbox(key="reader").set_value(reader).run()
+        for view in ("worklist", "read"):
+            app.segmented_control(key="nav").set_value(view).run()
+            assert not app.exception, (reader, view, app.exception)
+        for v in ("adapt", "perf", "audit", "about"):
+            app.button(key=f"go_{v}").click().run()
+            assert not app.exception and app.session_state["view"] == v, (reader, v, app.exception)
+            assert app.session_state["nav"] is None                     # research area is outside the two modes
+        app.button(key="back_wl").click().run()
+        assert app.session_state["view"] == "worklist"
+    app.segmented_control(key="nav").set_value(None).run()             # deselecting keeps the page
+    assert app.session_state["view"] == "worklist" and not app.exception
+
+
+def test_simulated_reader_in_read_view(app, run_dir):
+    app.selectbox(key="reader").set_value("reader_c").run()
+    app.segmented_control(key="nav").set_value("read").run()
+    cid = app.session_state["case"]
+    app.button(key=f"sim_{cid}").click().run()
+    ev = _events(run_dir, "reader_c")
+    assert not app.exception and len(ev) == 1 and ev[0]["session_id"].startswith("S-")
+
+
+def test_worklist_search_filter_and_viewer_controls(app):
+    app.text_input(key="wl_search").input("lits_0").run()
+    assert not app.exception
+    app.segmented_control(key="wl_filter").set_value("decided").run()
     assert not app.exception
     app.segmented_control(key="wl_filter").set_value("all").run()
-    app.toggle(key="wl_compact").set_value(True).run()
-    assert len(app.dataframe) >= 1
-    cid = app.selectbox(key="wl_pick").options[0].split(" · ")[1]
-    app.selectbox(key="wl_pick").set_value(cid).run()
-    assert app.session_state["view"] == "read" and app.session_state["case"] == cid
+    app.toggle(key="wl_details").set_value(True).run()
+    cid = _order(app)[0]
+    app.button(key=f"open_{cid}").click().run()
+    s0 = app.session_state[f"slice_{cid}"]
+    app.button(key="slice_next").click().run()
+    assert app.session_state[f"slice_{cid}"] != s0 or not app.exception
+    app.segmented_control(key="window").set_value("custom").run()
+    app.button(key="reset_view").click().run()
+    assert not app.exception and app.session_state["window"] == "liver"
 
 
 def test_onboarding_without_runs(tmp_path, monkeypatch):

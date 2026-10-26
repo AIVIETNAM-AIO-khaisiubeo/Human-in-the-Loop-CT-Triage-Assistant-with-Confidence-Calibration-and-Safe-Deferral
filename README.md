@@ -40,7 +40,7 @@ independent read for readers (and cases) where its help would do more harm than 
 | | Deterministic, template-based **report draft**; MedGemma's text is quoted verbatim as *unverified* and checked for sizes the measurement tool did not produce | `radagent/report.py`, `radagent/vlm/guard.py` |
 | **Aim 2 - learning from corrections** | Accept / edit / reject feedback log, **per-reader trust curve**, reader-specific threshold and **learning to defer** | `radagent/policy.py`, `radagent/readers/` |
 | **Aim 3 - evaluation** | Simulated readers A (over-reliant), B (sceptical), C (inconsistent); universal vs reader-specific vs deferral policies on the same held-out LiTS cases; RQ1-RQ3 analyses; segmenter vs MedGemma vs fused | `radagent/experiments.py`, `notebooks/evaluation.ipynb` |
-| Reading interface | Calm, accessible website designed around the radiologist's reading journey (deep navy, soft teal, white; WCAG AA contrast; 48 px touch targets; works on workstation, tablet and phone): worklist cards, CT viewer, independent impression first, AI suggestion in plain words with MedGemma agreement, accept / edit / reject, report, adaptation, performance and audit views - see [`docs/UX_DESIGN.md`](docs/UX_DESIGN.md) | `app/` |
+| Reading interface | A reading website built around the radiologist's journey and an external design review: blind first read (no AI output before your own impression), CT-first reading view, separate AI-evidence and decision panels, session-frozen and versioned decision policy, decisions logged with the recommendation on screen; semantic navy / teal / amber / red / slate palette with WCAG AA contrast, 44 px targets, keyboard shortcuts - see [`docs/UX_DESIGN.md`](docs/UX_DESIGN.md) | `app/` |
 
 
 
@@ -166,35 +166,37 @@ takes over and the trace says so.
 
 ## 5. Five-minute walkthrough
 
-The website follows a radiologist's reading journey (design notes and colour tokens in
-[`docs/UX_DESIGN.md`](docs/UX_DESIGN.md)). The navy header always shows who is reading, the active decision
-policy and that this is a research prototype; below it a status strip counts the cases *to read*, *urgent*,
-*AI tools disagree*, *independent reads* and *reviewed*.
+The website has two working modes - **Worklist** and **Read case** - and a separate **Research and quality**
+area in the sidebar. Design notes, the radiologist journey and the response to the design review:
+[`docs/UX_DESIGN.md`](docs/UX_DESIGN.md).
 
-1. **Worklist** - one card per case in priority order: category badge (shape + word + colour), the AI suggestion
-   and *why* the case is ranked there, the calibrated probability against the threshold, MedGemma's agreement and
-   the review status. **Open case** goes straight to the read; *Compact table* gives one row per case on large
-   screens. Switch *Reading as* and *Decision policy* in **Session settings** (left sidebar; on a phone, the menu at
-   the top left) and watch categories, the threshold and the independent reads change.
-2. **Read case** - a step indicator guides *1 Your impression → 2 AI suggestion → 3 Your decision → 4 Report*.
-   The CT viewer opens with AI overlays hidden; record **Tumour present / No tumour** first, then the AI suggestion
-   appears in plain words: calibrated probability, how confident the AI is, whether the segmenter and MedGemma
-   agree, why the case was prioritised, the measurements and the lesion table. MedGemma's slices and its unverified
-   text, and the technical details, are one tap away. Then **Accept / Reject** or **Edit** (keep or drop lesions);
-   after saving, **Next case** or **View report**. **Previous / Next** move along the worklist without the sidebar.
-3. Choose *Reader B - sceptical* in Session settings and press **Simulate the next N reads** - the policy is
-   refitted after every read.
-4. **AI adaptation** - the reader's threshold and deferral rule in words, how they evolved, and the learned
-   *trust curve* (with the true simulated curve for comparison).
-5. **Report** - the deterministic report with the SECOND READ section and the reader's decision; copy or download.
-6. **Performance** - segmenter vs MedGemma vs combined on the test cases, calibration, simulated-reader policy
-   comparison and all figures. **Audit trail** - every tool call, reason and timing; re-run the case with the rule
-   or LLM planner, or recompute it from the CT file. **About** - intended use, what it is not for, and how a case
-   is pre-read.
+1. **Worklist** - a slim session bar (reader, reading mode, session and model-set ids, research label), a one-line
+   queue summary and a dense table: position, case, *Image / AI QC* (operational), *AI finding*, status and one
+   **Open** action. In the default **blind first read** the cases are in arrival order and the AI finding stays
+   hidden (*Hidden until your impression*); switch *Reading mode* to **AI-assisted triage** in the sidebar to see
+   AI categories, probabilities, tool disagreement and the AI priority order. Use *Show*, *Find case* and
+   *Details* in the toolbar.
+2. **Read case** - previous / next (or **P** / **N**) and a case picker, then three steps:
+   *Independent read → Reveal AI evidence → Reconcile and decide*. The CT viewer opens without AI overlays
+   (orientation markers, slice *n / N*, window/level presets or custom W/L in HU, zoom and pan, overlay
+   opacity, **J** / **K** to step slices). Save your impression; the AI evidence then appears next to it:
+   the calibrated patient-level probability, its uncertainty on a stated scale, whether the two AI tools agree on
+   the class *and* the score, validity (QC), measurements and the lesion table. In **Reconcile and decide** record
+   *Tumour / No tumour / Defer*, optionally modify the AI lesions, and **Save decision**; then **Next unread
+   case** or **Open report**.
+3. **Research and quality** (sidebar):
+   * **Reader adaptation** - the policy active in this session (frozen) next to the policy proposed from the
+     logged decisions; **Apply from the next case** is the only way it changes, and every change is logged.
+     For a simulated reader (Reading as *Reader B*, say), **Simulate N reads** runs an offline simulation.
+   * **Model performance** - segmentation model vs second-reader model vs combined, calibration, simulated-reader
+     policy comparison and all figures.
+   * **Audit trail** - every decision on the case with the recommendation that was on screen, policy and
+     model-set versions; the agent's tool calls; re-run or recompute from the CT.
+   * **About and intended use** - what it is and is not for, and the supported-device policy.
 
-Turn on *Research mode* in Session settings to overlay the reference annotation and label each decision as a
-correct acceptance, harmful acceptance, correct or wrong rejection. A link such as
-`?view=read&case=lits_028` opens a case directly.
+Turn on *Research mode* in the sidebar to overlay the reference annotation and label each decision as a correct
+acceptance, harmful acceptance, correct or wrong rejection. A link such as `?view=read&case=lits_028` opens a
+case directly.
 
 ## 6. Methods
 
@@ -353,9 +355,11 @@ a wrapper around its own generation code. `vlm: {backend: none}` runs the agent 
 **Tests** need no GPU and no download: they write small CT volumes in the Kaggle LiTS layout and run the whole
 pipeline (manifest → segmenter → MedGemma tool → calibration → agent → reports → reader experiment → figures, and a
 recompute from the CT) with stand-in adapter classes; MedGemma's token scoring, prompt layout and text guard are
-tested with a fake tokenizer. `tests/test_app.py` drives the real website with Streamlit's AppTest through the
-whole reading journey (worklist → impression → AI suggestion → accept / edit / independent read → next case →
-report, every view for every reader, simulated reads, feedback reset) and checks the colour palette against WCAG AA.
+tested with a fake tokenizer. `tests/test_app.py` drives the real website with Streamlit's AppTest and checks the
+safety rules as behaviour: no AI output for unread cases in a blind first read, AI evidence only after a saved
+impression, decisions stored with the recommendation on screen and the session / policy / model versions, a policy
+that changes only when explicitly applied, QC failures that withhold the AI output, *defer* without a final finding;
+plus every view for every reader and the colour palette against WCAG AA.
 
 ```bash
 pip install -r requirements-dev.txt && pytest -q

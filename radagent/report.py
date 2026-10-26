@@ -17,7 +17,8 @@ ACTION_TEXT = {
     "accept": "accepted the AI suggestion",
     "edit": "edited the AI suggestion",
     "reject": "rejected the AI suggestion",
-    "manual": "read the case without an AI suggestion (deferred)",
+    "manual": "read the case without an AI suggestion (AI suggestion withheld)",
+    "defer": "deferred the decision (second opinion requested)",
 }
 
 
@@ -123,7 +124,15 @@ def draft_report(record: dict, review: dict | None = None, policy: dict | None =
                  f"{ACTION_TEXT.get(review.get('action'), review.get('action'))} at {when}.")
         if review.get("initial_read") is not None:
             L.append(f"  Independent impression before seeing the AI: {'tumour' if review['initial_read'] else 'no tumour'}.")
-        L.append(f"  Final finding: {'liver tumour present' if review.get('final_label') else 'no liver tumour'}.")
+        if review.get("final_label") is None:
+            L.append("  Final finding: not yet decided - deferred for a second opinion.")
+        else:
+            L.append(f"  Final finding: {'liver tumour present' if review.get('final_label') else 'no liver tumour'}.")
+        rec = review.get("recommendation") or {}
+        if rec:
+            L.append(f"  AI recommendation shown at decision time: {rec.get('text', '-')}"
+                     + (f" (policy {review.get('policy_version')}, model set {review.get('model_version')})"
+                        if review.get("policy_version") else "") + ".")
         if review.get("edit"):
             e = review["edit"]
             if e.get("kept_lesions") is not None:

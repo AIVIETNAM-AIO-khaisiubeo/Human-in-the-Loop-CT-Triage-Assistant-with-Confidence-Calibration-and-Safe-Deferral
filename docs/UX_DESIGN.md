@@ -1,68 +1,92 @@
 # Reading interface - UX design notes
 
 The website is the radiologist's side of ReaderAdapt-Liver. These notes record who it is for, the
-reading journey it supports, and the design rules derived from that journey. They are the reference
-for future UI changes.
+reading journey it supports, the design rules derived from it, and how the external design review
+(round 2) was addressed. They are the reference for future UI changes.
+
+> Research prototype. Nothing here claims clinical readiness; section 6 lists what would have to be
+> shown before any clinical use.
 
 ## 1. Context of use
 
 | | |
 |---|---|
-| **Users** | General radiologists and residents in a regional hospital (not necessarily abdominal sub-specialists); a QA / research lead who reviews performance. |
-| **Devices** | Reading-room workstation (large screen, dimmed room); office desktop; tablet or phone on the ward and on call. |
-| **Environment** | Frequent interruptions, end-of-shift fatigue, shared workstations, hospital networks that may block external fonts and CDNs. |
-| **Stakes** | The AI makes suggestions; the radiologist is responsible for every finding. Over-trust (accepting a wrong suggestion) and under-trust (ignoring a right one) are both harms. |
+| **Users** | General radiologists and residents in a regional hospital; a QA / research lead who reviews performance and adaptation. |
+| **Devices** | Reading-room workstation (large screen, dimmed room) for interpretation; office desktop; tablet or phone only for checking the worklist and saved decisions. |
+| **Environment** | Interruptions, end-of-shift fatigue, shared workstations, hospital networks that may block external fonts and CDNs (the bundled Source Sans font is used). |
+| **Stakes** | The AI suggests; the radiologist decides. Anchoring on AI output, over-trust and under-trust are use errors with patient impact. |
 
-## 2. Radiologist journey
+## 2. Two working modes and a separate research area
 
-| # | Stage | What the radiologist needs to know or do | Interface answer |
+| Mode | Goal | What is on screen |
+|---|---|---|
+| **Worklist** | Find the next case and see whether it is ready to read. | Slim session bar, one-line queue summary, a toolbar (status filter, case search, order, details), a dense table with consistent row heights: position, case, *Image / AI QC* (operational), *AI finding* (hidden in blind mode), status, one **Open** action. |
+| **Read case** | Read the images, examine the evidence, decide, document. | Case bar (previous / case picker / next), a three-step indicator, the CT viewer as the main workspace, then *AI evidence* and *Reconcile and decide* as two separate panels. No queue statistics. |
+| **Research and quality** (sidebar) | Governance, not reading. | Reader adaptation, model performance, audit trail of the current case, intended use and supported devices. |
+
+## 3. The reading journey
+
+| # | Stage | Interface |
+|---|---|---|
+| 0 | **Arrive** | Slim navy bar: app, *research prototype*, reader, reading mode, session id, model-set id. |
+| 1 | **Plan** | Worklist. In *blind first read* (default) cases are in **arrival order** and no AI output is shown for unread cases: no prediction, no probability, no disagreement flag, no AI-derived priority or urgency count. Operational QC status is shown, and a warning appears only when unread cases need action. |
+| 2 | **Independent read** | The viewer opens with every AI overlay off and disabled; the start slice is the middle of the slab, not the AI's key slice. Two large answers (*Tumour present* / *No liver tumour*); **Save impression and reveal AI evidence**. |
+| 3 | **Reveal AI evidence** | Your impression and the AI suggestion side by side (*same as / differs from your impression*). AI summary: target and unit stated (*patient-level probability that this CT shows at least one liver tumour, calibrated*), threshold, uncertainty with its scale, class *and* score agreement of the two AI tools, validity (QC), reasons on demand. Measurements as one group, lesion table with *show lesion slice*. Second-reader text, uncertainty/calibration and model versions are collapsed. |
+| 4 | **Reconcile and decide** | A separate panel: final finding **Tumour / No tumour / Defer** (second opinion), optional lesion edit and note, one **Save decision**. The action (agreed / modified / differs / independent / deferred) is derived; the AI suggestion is not a pre-selected answer. |
+| 5 | **Report** | Fixed-template draft with the decision and the recommendation that was on screen; copy / download. Closed in blind mode until the impression is saved. |
+| 6 | **Govern** | Research area: the active (frozen) policy versus the proposed one, explicit *Apply*, policy-change log, decision log with recommendation shown, agent trace. |
+
+## 4. Design rules
+
+**Colour has one meaning each** (contrast checked in `tests/test_app.py`):
+
+| Token | Value | Meaning | Contrast |
 |---|---|---|---|
-| 0 | **Arrive** | Who am I reading as? Is this a clinical or research tool? How much work is waiting? | Navy header with reader identity and a calm, permanent "research prototype - not for clinical use" label; a status strip: *to read, urgent, AI tools disagree, deferred to you, reviewed*. Model performance is not shown here - it belongs to QA. |
-| 1 | **Plan** (worklist) | Which case first, and *why* is it ranked there? | Case cards in priority order with a category badge (shape + word + colour), the AI suggestion, the reason for the priority, the AI tools' agreement and the review status; one large **Open** button per case. A compact table remains for desktop power users. |
-| 2 | **Independent read** | Look at the CT without being anchored by the AI. | Sequential protocol: the viewer opens with AI overlays hidden; a clear step indicator (*1 Your impression → 2 AI suggestion → 3 Decision → 4 Report*); two large answer buttons. |
-| 3 | **Understand the AI** | What does it suggest, how sure is it, do its tools agree, what did it measure, and can I trust this? | Plain-language headline ("Liver tumour likely"), the calibrated probability and an uncertainty level in words, an explicit agreement line for the segmenter and MedGemma, the measurements as large tiles, quality-control warnings, the lesion table. Technical details and MedGemma's unverified text are one tap away, not in the way. Provenance (which models, calibrated on which split) is always stated. |
-| 4 | **Decide** | Accept, edit or reject with no accidental taps, then move on. | Three large, well-separated buttons (Accept is the only filled one); edit opens a short form; a saved-decision confirmation with **Next case** and **View report**. |
-| 5 | **Report** | Check and take the structured draft. | Document-style panel with copy and download, the review status and who decided. |
-| 6 | **Reflect** | How is the assistant adapting to me, and why? | "How the assistant adapts to you": current threshold and deferral rule in words, number of reads, why it is or is not personalised yet, the trust curve. |
-| 7 | **Govern** (QA lead) | Is the AI calibrated? What did the agent do on this case? | *Performance* and *Audit trail* views, separated from the reading flow. |
+| Navy | `#102D52` | application structure: header, navigation, headings | 13.8 : 1 on white |
+| Teal | `#0F766E` | active controls and primary actions only - never "the AI is right" | 5.5 : 1 with white text |
+| Red | `#B42318` | a validated critical rule (urgent: probability ≥ 85 % and lesion ≥ 5 mL or ≥ 20 mm) | 6.1 : 1 on its tint |
+| Amber | `#B54708` | caution or review needed: QC issue, uncertain output, tool disagreement, deferred | 5.1 : 1 on its tint |
+| Slate | `#526579` | neutral and technical information, metadata | 6.0 : 1 on white |
 
-Moving between cases never requires the sidebar: **Previous / Next** sit above the viewer and every
-worklist card opens its case directly. The sidebar holds session settings that change rarely (reader,
-decision policy, worklist, protocol, research mode).
+No green is used: a positive colour next to an AI output would read as clinical approval. Category badges
+say *AI:* (e.g. *AI: tumour suspected*) and pair a distinct shape with the word. The CT is shown on a
+near-black panel; overlays (teal liver outline, amber lesions with adjustable fill, violet uncertainty) are
+mutually distinguishable and visible on dark and grey backgrounds.
 
-## 3. Design rules
+**Type** (body 16 px): app title and page heading 22 px, case identifier 19 px, labels and table text
+14-15 px, secondary metadata 13-14 px. Bold is reserved for the case identifier, findings and actions;
+probabilities are percentages, volumes in mL, numbers in tabular figures.
 
-**Colour.** Deep navy for structure and headings, soft teal for actions and highlights, a white page.
-Every text/background pair meets WCAG 2.1 AA (most exceed 6:1):
+**Components**: one strong boundary (the viewer), one evidence panel, one decision panel; separators
+instead of nested cards; measurements as a single group; disclosure for details.
 
-| Token | Value | Use | Contrast |
-|---|---|---|---|
-| navy | `#0B2545` | headings, header band | 15.4 : 1 on white |
-| ink | `#16324F` | body text | 13.1 : 1 |
-| muted | `#4A5D72` | secondary text | 6.8 : 1 |
-| teal | `#0F766E` | primary buttons, focus ring, links | 5.5 : 1 with white |
-| teal tint | `#E3F3F1` | selected / highlight backgrounds | teal-dark text 6.6 : 1 |
-| soft teal | `#8FD3CB` | accents on navy | 9.1 : 1 on navy |
+**Touch and keyboard**: controls at least 44 px high (the two clinical answers 52 px); visible 3 px focus
+ring; reduced-motion support. Shortcuts: **J / K** next / previous slice, **N / P** next / previous case -
+never on decision buttons, and inactive while typing.
 
-Triage categories have their own muted colours (urgent red `#B42318`, suspicious amber `#B54708`,
-uncertain violet `#5B3CC4`, likely normal green `#067647`, deferred blue `#1D4E89`, QC fail slate
-`#344054`), always paired with a glyph and a word, so colour is never the only cue. The CT itself is
-shown on a near-black panel: radiologists read images on dark surroundings, and a white frame around
-a CT causes glare in a dimmed reading room.
+**Responsive**: rows reflow by the space they actually have; on narrow screens the worklist rows become
+compact cards with inline labels, the session bar keeps only the title and research label, and the case
+view shows a *small screen - not for diagnostic interpretation* notice.
 
-**Type.** The bundled Source Sans font (no external font requests). Body 17 px, line height 1.55;
-page title 26-28 px, section titles 20-21 px, card titles 18 px; secondary text never below 14 px;
-tabular figures for numbers.
+## 5. Design review (round 2) - what changed
 
-**Touch and keyboard.** Buttons, segmented controls, inputs and toggles are at least 48 px high with
-at least 8 px between targets; the slider thumb is enlarged. Every interactive element shows a 3 px teal
-focus ring. Motion is disabled for users who ask for reduced motion.
+| Review point | Response |
+|---|---|
+| **P0** AI cues leaked into the "independent impression first" worklist | *Blind first read* mode: no AI prediction, probability, disagreement or AI priority for unread cases; arrival order; urgency and disagreement counts removed from the summary; case picker shows status only; report and audit trail closed until the impression is saved. AI evidence unlocks only after a saved impression and is shown next to it. |
+| **P0** Adaptation must not change behaviour silently | The decision policy is frozen per session (versioned, shown in the sidebar); a proposed update is applied only with *Apply* and logged to `feedback/policy_changes.jsonl`; batch simulation runs offline and never changes the active policy. "Reader adaptation" moved to the research area. |
+| **P0** Audit what was shown | Each decision stores session id, policy version, model-set version, the recommendation text and values on screen, and the impression time. The report quotes the recommendation shown. |
+| **P0** Ambiguous terms | *Urgent* is defined by its rule; agreement distinguishes class from score (*both flag a tumour, but their scores differ: 73 % vs 91 %*); uncertainty states its scale and thresholds; QC failures say what failed (image vs segmentation) and what it means, and are kept apart from clinical urgency; probability names its target. |
+| **P1** Reading view crowded | KPI cards removed; two-mode navigation; the CT viewer takes ~60 % of the width with orientation markers, *slice n / N*, window/level presets plus custom W/L in HU, zoom and pan, overlay visibility and opacity, reset, step buttons and shortcuts. Evidence and decision are separate panels; model names moved to *Models and versions*. |
+| **P1** Worklist too much dashboard | Dense table by default with consistent rows, one toolbar, a one-line summary, priority reason in *Details*. |
+| **P2** Visual system, typography, boxes | Semantic palette above; restrained type scale; fewer containers. |
+| **P2** Mobile | Compact cards, slim header, two-item navigation, explicit supported-device policy (About). |
 
-**Responsive.** Layouts are built from columns that stack below 640 px; the status strip reflows from
-five tiles to two per row; the worklist becomes a single column of cards with full-width buttons; images
-scale to the screen width.
+## 6. Before any clinical use
 
-**Trust.** Say what the AI is and is not: the research label is permanent but not alarming; the AI's
-probability is called *calibrated* only because it is; uncertainty and tool disagreement are shown next
-to the suggestion, never hidden; model text is labelled *unverified*; the radiologist's decision is
-always the last step.
+The interface is a research instrument. A clinical evaluation would need, at minimum: a usability-engineering
+process in the spirit of IEC 62366-1 and current human-factors guidance for medical devices; formative and
+summative studies with representative radiologists on realistic cases and the intended diagnostic displays,
+measuring whether users recognise failed QC, distinguish probability from uncertainty, read independently
+before seeing AI output, understand the consequences of each decision, recover from mistakes and complete the
+workflow under interruption; validation of the viewer on diagnostic displays; and offline validation of any
+adaptive behaviour before it is enabled.

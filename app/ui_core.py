@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -87,27 +88,61 @@ def _blend(img: np.ndarray, mask: np.ndarray, color: np.ndarray, alpha: float) -
         img[mask] = (1 - alpha) * img[mask] + alpha * color
 
 
+def window_to_u8(width: float, level: float, hu_window=(-100.0, 250.0)) -> tuple[float, float]:
+    """Window/level in HU -> display range in the stored uint8 viewer values (stored = hu_window)."""
+    lo, hi = float(hu_window[0]), float(hu_window[1])
+    a, b = level - width / 2.0, level + width / 2.0
+    return (a - lo) / (hi - lo) * 255.0, (b - lo) / (hi - lo) * 255.0
+
+
+def _put_label(img: np.ndarray, text: str, org: tuple[int, int], scale: float) -> None:
+    import cv2
+
+    th = max(1, int(round(scale * 2)))
+    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), th + 3, cv2.LINE_AA)
+    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (235, 241, 247), th, cv2.LINE_AA)
+
+
+def orientation_markers(img: np.ndarray) -> np.ndarray:
+    """Radiological axial view: patient's right on the viewer's left (R), anterior at the top (A)."""
+    import cv2
+
+    h, w = img.shape[:2]
+    s = max(0.5, w / 640.0)
+    (tw, tht), _ = cv2.getTextSize("A", cv2.FONT_HERSHEY_SIMPLEX, s, 2)
+    pad = int(10 * s)
+    _put_label(img, "R", (pad, h // 2 + tht // 2), s)
+    _put_label(img, "L", (w - pad - tw, h // 2 + tht // 2), s)
+    _put_label(img, "A", (w // 2 - tw // 2, pad + tht), s)
+    _put_label(img, "P", (w // 2 - tw // 2, h - pad), s)
+    return img
+
+
 def render_slice(arrs: dict, i: int, show_liver: bool = True, show_lesions: bool = True, kept_lesions=None,
                  selected_lesion: int | None = None, show_uncertainty: bool = False, show_reference: bool = False,
-                 upscale: int = 4, contrast: tuple[int, int] = (0, 255)) -> np.ndarray:
-    """Compose an RGB uint8 image of viewer slice ``i`` with the requested overlays."""
+                 upscale: int = 4, contrast: tuple[float, float] = (0, 255), lesion_alpha: float = 0.35,
+                 unc_alpha: float = 0.85, zoom: float = 1.0, pan: tuple[float, float] = (0.0, 0.0),
+                 markers: bool = False) -> np.ndarray:
+    """Compose an RGB uint8 image of viewer slice ``i`` with the requested overlays.
+
+    ``contrast`` is the display range in stored uint8 values (see :func:`window_to_u8`); ``zoom`` >= 1
+    crops around the image centre shifted by ``pan`` (fractions of the half-width, -1..1).
+    """
     lo, hi = contrast
     ct = arrs["ct"][i].astype(np.float32)
-    ct = np.clip((ct - lo) / max(1, hi - lo) * 255.0, 0, 255)
+    ct = np.clip((ct - lo) / max(1e-3, hi - lo) * 255.0, 0, 255)
     img = np.repeat(ct[..., None], 3, axis=2)
-    if show_uncertainty:
+    if show_uncertainty and unc_alpha > 0:
         h = arrs["entropy"][i].astype(np.float32) / 255.0
-        a = np.clip(h * 0.85, 0, 0.85)[..., None]
+        a = np.clip(h * unc_alpha, 0, unc_alpha)[..., None]
         img = (1 - a) * img + a * C_UNC
     lesions = arrs["lesions"][i]
-    if show_lesions and lesions.any():
-        ids = np.unique(lesions[lesions > 0])
-        if kept_lesions is not None:
-            ids = [k for k in ids if int(k) in set(kept_lesions)]
+    ids_all = np.unique(lesions[lesions > 0]) if lesions.any() else []
+    ids = [k for k in ids_all if kept_lesions is None or int(k) in set(kept_lesions)]
+    if show_lesions and lesion_alpha > 0:
         for k in ids:
-            m = lesions == k
             col = C_SELECTED if selected_lesion is not None and int(k) == selected_lesion else C_LESION
-            _blend(img, m, col, 0.35)
+            _blend(img, lesions == k, col, lesion_alpha)
     img = np.clip(img, 0, 255).astype(np.uint8)
     if upscale > 1:
         img = np.repeat(np.repeat(img, upscale, axis=0), upscale, axis=1)
@@ -117,10 +152,7 @@ def render_slice(arrs: dict, i: int, show_liver: bool = True, show_lesions: bool
 
     if show_liver:
         img[_edges(up(arrs["liver"][i] > 0))] = C_LIVER
-    if show_lesions and lesions.any():
-        ids = np.unique(lesions[lesions > 0])
-        if kept_lesions is not None:
-            ids = [k for k in ids if int(k) in set(kept_lesions)]
+    if show_lesions:
         for k in ids:
             col = C_SELECTED if selected_lesion is not None and int(k) == selected_lesion else C_LESION
             img[_edges(up(lesions == k))] = col
@@ -128,7 +160,24 @@ def render_slice(arrs: dict, i: int, show_liver: bool = True, show_lesions: bool
         ref = arrs["reference"][i]
         img[_edges(up(ref == 2))] = C_REF
         img[_edges(up(ref > 0)) & (np.indices(img.shape[:2]).sum(0) % 6 < 3)] = C_REF   # dotted liver outline
+    if zoom > 1.0:
+        import cv2
+
+        H, W = img.shape[:2]
+        ch, cw = int(round(H / zoom)), int(round(W / zoom))
+        cy = H / 2 + float(pan[1]) * (H - ch) / 2
+        cx = W / 2 + float(pan[0]) * (W - cw) / 2
+        y0 = int(np.clip(round(cy - ch / 2), 0, H - ch))
+        x0 = int(np.clip(round(cx - cw / 2), 0, W - cw))
+        img = cv2.resize(np.ascontiguousarray(img[y0:y0 + ch, x0:x0 + cw]), (W, H), interpolation=cv2.INTER_NEAREST)
+    if markers:
+        img = orientation_markers(np.ascontiguousarray(img))
     return img
+
+
+def neutral_slice_index(arrs: dict) -> int:
+    """Start slice that reveals nothing about the AI result: the middle of the stored slab."""
+    return len(arrs["z"]) // 2
 
 
 def key_slice_index(arrs: dict, record: dict) -> int:
@@ -167,7 +216,95 @@ def policy_trajectory(events: list[dict], cases: dict, cfg: dict, variant: str =
     return pd.DataFrame(rows)
 
 
-def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, reviews: dict, splits=("test",)) -> pd.DataFrame:
+# --------------------------------------------------------------------------- clinical wording
+IMAGE_CHECKS = {"voxel_spacing_plausible", "enough_slices"}
+SEGMENTATION_CHECKS = {"liver_found", "liver_volume_plausible", "tumour_inside_liver"}
+
+
+def pct(p) -> str:
+    return "-" if p is None or (isinstance(p, float) and np.isnan(p)) else f"{100 * float(p):.0f}%"
+
+
+def qc_status(record: dict) -> dict:
+    """Operational readiness of the AI output - kept separate from any clinical finding or urgency."""
+    q = record.get("quality") or {}
+    if q.get("passed", True):
+        return {"kind": "ok", "label": "QC passed", "detail": "Automatic checks passed.", "consequence": ""}
+    checks = [c for c in q.get("checks", []) if not c.get("passed", True)]
+    names = {c.get("name") for c in checks}
+    msgs = [c.get("message", "") for c in checks] or list(q.get("failed_reasons", []))
+    if names & IMAGE_CHECKS:
+        label = "Image QC failed"
+        consequence = ("The scan geometry is outside what the AI was built for: AI measurements may be wrong and "
+                       "the AI suggestion is withheld. Check the series, then read the case fully.")
+    else:
+        label = "Segmentation QC failed"
+        consequence = ("The AI segmentation is unreliable, so its tumour map, measurements and suggestion are "
+                       "withheld. Read the case fully; the images themselves are not affected.")
+    detail = "; ".join(m[:1].upper() + m[1:] for m in msgs if m)
+    return {"kind": "image" if label.startswith("Image") else "segmentation", "label": label,
+            "detail": detail, "consequence": consequence}
+
+
+def agreement(seg_p: float | None, vlm_p: float | None, score_gap: float = 0.15) -> dict:
+    """Class agreement and score agreement are different things - say which one holds."""
+    if seg_p is None or vlm_p is None:
+        return {"kind": "none", "text": "No second-reader result for this case."}
+    s_pos, v_pos = seg_p >= 0.5, vlm_p >= 0.5
+    flag = lambda pos: "flags a tumour" if pos else "does not flag a tumour"  # noqa: E731
+    if s_pos != v_pos:
+        return {"kind": "disagree", "text": f"The AI tools disagree: the segmentation model {flag(s_pos)} "
+                                            f"({pct(seg_p)}), the second-reader model {flag(v_pos)} ({pct(vlm_p)})."}
+    both = "Both AI tools flag a tumour" if s_pos else "Neither AI tool flags a tumour"
+    if abs(seg_p - vlm_p) >= score_gap:
+        return {"kind": "differ", "text": f"{both}, but their scores differ: {pct(seg_p)} vs {pct(vlm_p)}."}
+    return {"kind": "agree", "text": f"{both} with similar scores ({pct(seg_p)} and {pct(vlm_p)})."}
+
+
+UNCERTAINTY_DEFINITION = ("Uncertainty is the predictive entropy of the calibrated probability, on a 0-1 scale "
+                          "(0 = certain, 1 = a 50/50 call). Low < 0.50, medium 0.50-0.84, high ≥ 0.85.")
+
+
+def uncertainty_phrase(u: float) -> str:
+    lvl = uncertainty_level(float(u))
+    return f"{lvl.capitalize()} uncertainty ({float(u):.2f} on a 0-1 scale)"
+
+
+def urgent_rule(cfg: dict) -> str:
+    t = cfg["triage"]
+    return (f"probability ≥ {pct(t['urgent_probability'])} and a lesion ≥ {t['urgent_volume_ml']:g} mL "
+            f"or ≥ {t['urgent_diameter_mm']:g} mm")
+
+
+def short_hash(obj) -> str:
+    return hashlib.sha1(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()[:7]
+
+
+def model_version(cfg: dict, calibration: dict | None, model_card: dict | None) -> dict:
+    """Identity of the model set used in this session: segmenter, second reader, calibration."""
+    seg = cfg["segmenter"]
+    vlm = cfg.get("vlm", {})
+    cal = (calibration or {}).get("calibrator", {})
+    parts = {"segmenter": seg.get("plugin") or seg["backend"], "segmenter_card": (model_card or {}).get("checkpoint"),
+             "img_size": cfg["preprocess"]["img_size"], "vlm": vlm.get("model_id") if vlm.get("backend") == "medgemma"
+             else vlm.get("plugin") or vlm.get("backend"), "vlm_slices": vlm.get("n_slices"),
+             "calibration": {k: cal.get(k) for k in ("method", "T", "a", "b", "va", "vb", "w")}}
+    return {"id": "M-" + short_hash(parts), "parts": parts}
+
+
+def policy_version(policy: ReaderPolicy) -> str:
+    return "P-" + short_hash({"name": policy.name, "reader": policy.reader_id, "t": round(policy.threshold, 4),
+                              "d": None if policy.defer_uncertainty is None else round(policy.defer_uncertainty, 4),
+                              "n": policy.n_feedback, "pers": policy.personalised})
+
+
+STATUS_TEXT = {"pending": "Unread", "impression": "Impression recorded", "accept": "Decided · agreed with AI",
+               "edit": "Decided · AI lesions modified", "reject": "Decided · differs from AI",
+               "manual": "Decided · independent read", "defer": "Deferred · second opinion"}
+
+
+def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, reviews: dict, splits=("test",),
+             impressions: set | None = None) -> pd.DataFrame:
     rows = []
     for cid, r in records.items():
         if r.get("split") not in splits:
@@ -176,25 +313,29 @@ def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, review
         d = policy.decide(c["tumour_probability"], c["uncertainty"], r["quality"]["passed"])
         t = triage(c, r["measurements"], r["quality"], cfg, threshold=policy.threshold)
         cat = t["category"]
-        if d["decision"] == "defer" and cat != "QC FAIL":
-            shown_cat = "DEFERRED"
-            suggestion = "Withheld - independent read"
+        qc = qc_status(r)
+        if cat == "QC FAIL":
+            shown_cat = "QC FAIL"
+            suggestion = "Withheld - automatic QC failed"
+            reasons = ["Placed early: needs a full manual read because the AI output is unreliable"]
         elif d["decision"] == "defer":
-            shown_cat = cat
-            suggestion = "Manual read (QC failed)"
+            shown_cat = "DEFERRED"
+            suggestion = "Withheld for this reader"
+            reasons = [f"AI suggestion withheld by this reader's policy ({d.get('reason', 'policy')})"] + \
+                list(t.get("reasons", []))
         else:
             shown_cat = cat
             suggestion = suggestion_text(c["tumour_probability"], policy.threshold)
+            reasons = list(t.get("reasons", []))
         rv = reviews.get(cid)
         vp = c.get("vlm_probability")
-        reasons = list(t.get("reasons", []))
-        if shown_cat == "DEFERRED":
-            reasons = [f"AI suggestion withheld for this reader ({d.get('reason', 'reader policy')})"] + reasons
-        reasons = [humanize(x) for x in reasons]
+        status = rv["action"] if rv else ("impression" if impressions and cid in impressions else "pending")
         rows.append({"case_id": cid, "priority": t["priority"], "category": shown_cat,
+                     "arrival": int(cases.get(cid, {}).get("number", 0) or _case_number(cid)),
+                     "qc_kind": qc["kind"], "qc_label": qc["label"], "qc_detail": qc["detail"],
                      "medgemma": float(vp) if vp is not None else float("nan"),
-                     "agree": ("disagree" if c.get("tools_disagree") else "agree") if vp is not None else "-",
-                     "reasons": "; ".join(str(x) for x in reasons),
+                     "agree": agreement(c.get("segmenter_probability"), vp)["kind"],
+                     "reasons": "; ".join(humanize(x) for x in reasons),
                      "unc_level": uncertainty_level(float(c["uncertainty"])),
                      "triage": f"{CATEGORY_ICON.get(shown_cat, '')} {CATEGORY_LABEL.get(shown_cat, shown_cat)}",
                      "ai_suggestion": suggestion,
@@ -202,7 +343,7 @@ def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, review
                      "tumour_ml": r["measurements"].get("predicted_tumour_volume_ml", 0.0),
                      "lesions": r["measurements"].get("n_lesions", 0),
                      "universal_category": r["triage"]["category"],
-                     "status": "pending" if rv is None else rv["action"]})
+                     "status": status, "status_text": STATUS_TEXT.get(status, status)})
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -211,31 +352,51 @@ def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, review
     return df
 
 
+def _case_number(cid: str) -> int:
+    digits = "".join(ch for ch in cid if ch.isdigit())
+    return int(digits) if digits else 0
+
+
+def order_worklist(wl: pd.DataFrame, blind: bool, sort: str = "priority") -> pd.DataFrame:
+    """Blind first read: arrival order, never an order derived from hidden AI results."""
+    if blind or sort == "arrival":
+        out = wl.sort_values(["arrival", "case_id"]).reset_index(drop=True)
+    else:
+        out = wl.sort_values(["rank"]).reset_index(drop=True)
+    out["position"] = np.arange(1, len(out) + 1)
+    return out
+
+
 # --------------------------------------------------------------------------- simulated / live reads
 def _draws(reader_id: str, case_id: str, salt: int = 0) -> np.ndarray:
     h = int(hashlib.sha256(f"{reader_id}|{case_id}|{salt}".encode()).hexdigest()[:12], 16)
     return np.random.default_rng(h).random(N_DRAWS)
 
 
-def simulate_and_log(store: RunStore, profile: ReaderProfile, case: dict, policy: ReaderPolicy, salt: int = 0) -> dict:
+def simulate_and_log(store: RunStore, profile: ReaderProfile, case: dict, policy: ReaderPolicy, salt: int = 0,
+                     audit: dict | None = None) -> dict:
     d = policy.decide(case["p"], case["u"], case["qc_passed"])
     r = simulate_read(profile, case, d, _draws(profile.reader_id, case["case_id"], salt))
     ev = FeedbackEvent(reader_id=profile.reader_id, case_id=case["case_id"], policy=policy.name, shown=r["shown"],
                        ai_label=d["ai_label"], ai_probability=case["p"], ai_confidence=d["confidence"],
                        uncertainty=case["u"], threshold=policy.threshold, initial_read=r["initial_read"],
-                       action=r["action"], final_label=r["final_label"], source="simulated-ui").to_dict()
+                       action=r["action"], final_label=r["final_label"], source="simulated-ui",
+                       **(audit or {})).to_dict()
     FeedbackStore(store.p("feedback")).append(ev)
     return {**ev, "decision": d, "gt_present": case["gt_present"], "switched": r["switched"]}
 
 
 def log_live(store: RunStore, case: dict, policy: ReaderPolicy, initial_read: int | None, action: str,
-             final_label: int, edit: dict | None = None) -> dict:
+             final_label: int | None, edit: dict | None = None, audit: dict | None = None) -> dict:
+    """Save a live decision with what was shown at decision time (``audit``: session, versions,
+    recommendation text, impression / reveal times)."""
     d = policy.decide(case["p"], case["u"], case["qc_passed"])
     ev = FeedbackEvent(reader_id=LIVE_READER, case_id=case["case_id"], policy=policy.name,
                        shown=d["decision"] == "show", ai_label=d["ai_label"], ai_probability=case["p"],
                        ai_confidence=d["confidence"], uncertainty=case["u"], threshold=policy.threshold,
-                       initial_read=initial_read, action=action, final_label=int(final_label), source="live",
-                       edit=edit).to_dict()
+                       initial_read=initial_read, action=action,
+                       final_label=None if final_label is None else int(final_label), source="live",
+                       edit=edit, **(audit or {})).to_dict()
     FeedbackStore(store.p("feedback")).append(ev)
     return ev
 
@@ -245,6 +406,8 @@ def reader_profiles(cfg: dict) -> dict:
 
 
 def outcome_label(ev: dict, gt_present: bool) -> str:
+    if ev.get("final_label") is None:
+        return "deferred (no final finding yet)"
     ok = int(ev["final_label"]) == int(gt_present)
     ai_ok = ev.get("ai_label") is not None and int(ev["ai_label"]) == int(gt_present)
     if not ev["shown"]:
