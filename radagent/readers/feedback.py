@@ -24,11 +24,19 @@ class FeedbackEvent:
     uncertainty: float
     threshold: float
     initial_read: int | None
-    action: str                       # accept | edit | reject | manual
-    final_label: int
+    action: str                       # accept | edit | reject | manual | defer
+    final_label: int | None           # None when the reader deferred the decision
     source: str = "simulated"         # simulated | live
     edit: dict | None = None
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    # audit context: what exactly was shown when the decision was made
+    session_id: str | None = None
+    policy_version: str | None = None
+    model_version: str | None = None
+    recommendation: dict | None = None  # label text, probability, threshold, uncertainty, tool agreement
+    impression_at: str | None = None
+    revealed_at: str | None = None
+    supersedes: str | None = None      # timestamp of the decision this one revises (never overwritten)
 
     def to_dict(self) -> dict:
         return asdict(self)

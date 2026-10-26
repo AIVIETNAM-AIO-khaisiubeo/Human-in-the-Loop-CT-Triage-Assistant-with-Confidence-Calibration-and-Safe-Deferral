@@ -158,6 +158,8 @@ def fit_policy(events: list[dict], cases: dict[str, dict], cfg: dict, reader_id:
     pcfg = cfg["policy"]
     t_univ = float(pcfg["universal_threshold"])
     name = name or variant
+    # a deferred decision ("second opinion") carries no final finding -> not evidence about trust
+    events = [e for e in events if e.get("action") != "defer" and e.get("final_label") is not None]
     arr = _arrays(events, cases)
     ev = arr["events"]
     n = len(ev)
