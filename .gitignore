@@ -4,6 +4,7 @@ __pycache__/
 data/
 outputs/*/cache/train_slices/
 outputs/*/feedback/
+outputs/*/model/*.pt
 checkpoints/*.pt
 *.zip
 .DS_Store

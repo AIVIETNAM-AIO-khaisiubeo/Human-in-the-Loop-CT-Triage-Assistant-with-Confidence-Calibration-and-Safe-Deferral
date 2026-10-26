@@ -181,7 +181,10 @@ def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, review
             shown_cat = cat
             suggestion = suggestion_text(c["tumour_probability"], policy.threshold)
         rv = reviews.get(cid)
+        vp = c.get("vlm_probability")
         rows.append({"case_id": cid, "priority": t["priority"], "category": shown_cat,
+                     "medgemma": float(vp) if vp is not None else float("nan"),
+                     "agree": ("⚠️ disagree" if c.get("tools_disagree") else "✓") if vp is not None else "-",
                      "triage": f"{CATEGORY_ICON.get(shown_cat, '')} {shown_cat}", "ai_suggestion": suggestion,
                      "tumour_probability": c["tumour_probability"], "uncertainty": c["uncertainty"],
                      "tumour_ml": r["measurements"].get("predicted_tumour_volume_ml", 0.0),

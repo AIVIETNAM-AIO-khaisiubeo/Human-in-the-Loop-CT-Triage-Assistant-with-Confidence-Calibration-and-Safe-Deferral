@@ -3,8 +3,9 @@
 Each tool is a plain Python function ``fn(ctx, **args) -> summary`` with a
 description (shown to an LLM planner) and preconditions (enforced by the runner -
 a planner can *propose* any order, but the runner only executes a tool whose
-inputs exist). Tools never write free text about the patient; the only text they
-produce is the deterministic report template.
+inputs exist). The only free text about the patient comes from the vision-language
+second reader; it is stored verbatim, labelled as unverified and checked by guardrails,
+and it never feeds measurements or the triage decision.
 """
 from __future__ import annotations
 
@@ -30,6 +31,8 @@ def model_signature(cfg: dict) -> str:
 
     from radagent.models import checkpoint_path
 
+    if cfg["segmenter"]["backend"] == "plugin":
+        return f"plugin:{cfg['segmenter'].get('plugin')}:{cfg['preprocess']['img_size']}"
     p = checkpoint_path(cfg)
     if not p.exists():
         return f"{cfg['segmenter']['backend']}:missing"
@@ -54,6 +57,8 @@ class CaseContext:
     store: RunStore
     calibrator: Calibrator
     get_segmenter: Callable[[], object]
+    get_vlm: Callable[[], object] | None = None
+    vlm_mode: str = "cache"               # cache: reuse stored reads only | compute: run the VLM when missing
     research_mode: bool = True
     reader_policy: object | None = None
     force_recompute: bool = False
@@ -144,6 +149,74 @@ def measure_findings(ctx: CaseContext) -> dict:
             "n_lesions": m.get("n_lesions"), "largest_diameter_mm": m.get("largest_lesion_diameter_mm", 0.0)}
 
 
+def _vlm_summary(v: dict) -> dict:
+    if v.get("status") != "ok":
+        return {"status": v.get("status"), "reason": v.get("reason")}
+    return {"status": "ok", "source": v.get("source"), "p_yes": round(v["p_yes"], 4),
+            "final_answer": (v.get("guard") or {}).get("final_answer"), "slices": v.get("n_images"),
+            "seconds": v.get("seconds")}
+
+
+def vlm_second_read(ctx: CaseContext) -> dict:
+    """MedGemma (or another VLM adapter) reads axial slices through the predicted liver."""
+    from radagent.vlm import vlm_enabled, vlm_signature
+
+    vcfg = ctx.cfg["vlm"]
+    if not vlm_enabled(ctx.cfg):
+        ctx.record["vlm"] = {"status": "disabled", "reason": "vlm.backend is none"}
+        return _vlm_summary(ctx.record["vlm"])
+    sig = vlm_signature(ctx.cfg)
+    cached = ctx.analysis.get("vlm") or {}
+    seg_sig = ctx.analysis.get("model_signature")
+    if (not ctx.force_recompute and cached.get("status") == "ok" and cached.get("signature") == sig
+            and cached.get("seg_signature") == seg_sig):
+        ctx.record["vlm"] = {**cached, "source": "cache"}
+        return _vlm_summary(ctx.record["vlm"])
+    if ctx.vlm_mode != "compute":
+        ctx.record["vlm"] = {"status": "unavailable", "reason": "no stored MedGemma read for this case - run "
+                                                                 "`python -m radagent vlm` on a GPU"}
+        return _vlm_summary(ctx.record["vlm"])
+    from radagent.geometry import load_volume
+    from radagent.vlm.ct_prep import liver_z_range, select_slices, thumbnail, window_rgb
+    from radagent.vlm.guard import check_text
+
+    try:
+        vol = ctx.volume
+        if vol is None:
+            if not os.path.exists(str(ctx.row.get("ct_path", ""))):
+                raise FileNotFoundError(f"CT file not found: {ctx.row.get('ct_path')}")
+            vol = ctx.volume = load_volume(ctx.row["ct_path"])
+        zr = liver_z_range(ctx.analysis)
+        if zr is None:
+            raise ValueError("no liver found by the segmenter - nothing to show the VLM")
+        zs = select_slices(zr[0], zr[1], int(vcfg["n_slices"]))
+        images = [window_rgb(vol.view[z], vcfg["windows"]) for z in zs]
+        reader = ctx.get_vlm()
+        out = reader.read(images, describe=bool(vcfg.get("describe", True)))
+        guard = check_text(out.get("text", ""), ctx.record.get("measurements", {}), out["p_yes"])
+        v = {"status": "ok", "source": "model", "signature": sig, "seg_signature": seg_sig,
+             "model": reader.describe_model(), "p_yes": float(out["p_yes"]),
+             "answer_mass": float(out.get("answer_mass", float("nan"))), "text": out.get("text", ""),
+             "guard": guard, "slices_z": [int(z) for z in zs], "n_images": len(images),
+             "seconds": out.get("seconds")}
+        if ctx.persist:
+            ctx.analysis["vlm"] = v
+            ctx.store.save_analysis(ctx.case_id, ctx.analysis)
+            vp = ctx.store.viewer_path(ctx.case_id)
+            if vp.exists():
+                import numpy as np
+
+                arrs = ctx.store.load_viewer(ctx.case_id)
+                ts = int(vcfg.get("thumb_size", 160))
+                arrs["vlm_rgb"] = np.stack([thumbnail(im, ts) for im in images]).astype(np.uint8)
+                arrs["vlm_z"] = np.asarray(zs, dtype=np.int32)
+                ctx.store.save_viewer(ctx.case_id, arrs)
+    except Exception as e:  # the VLM is a second opinion: its failure must not stop the first read
+        v = {"status": "error", "reason": f"{type(e).__name__}: {e}"}
+    ctx.record["vlm"] = v
+    return _vlm_summary(v)
+
+
 def quality_check(ctx: CaseContext) -> dict:
     q = _qc(ctx.record["geometry"], ctx.record["measurements"], ctx.cfg)
     ctx.record["quality"] = q
@@ -152,10 +225,15 @@ def quality_check(ctx: CaseContext) -> dict:
 
 def estimate_confidence(ctx: CaseContext) -> dict:
     s = ctx.analysis["segmentation"]
-    c = case_confidence(s["tumour_score_raw"], s.get("pass_scores_raw", []), ctx.calibrator, ctx.cfg)
+    v = ctx.record.get("vlm") or {}
+    p_vlm = v.get("p_yes") if v.get("status") == "ok" else None
+    c = case_confidence(s["tumour_score_raw"], s.get("pass_scores_raw", []), ctx.calibrator, ctx.cfg, p_vlm)
     ctx.record["confidence"] = c
-    return {"tumour_probability": c["tumour_probability"], "uncertainty": c["uncertainty"],
-            "level": c["uncertainty_level"], "calibrator": c["calibrator"]}
+    out = {"tumour_probability": c["tumour_probability"], "uncertainty": c["uncertainty"],
+           "level": c["uncertainty_level"], "calibrator": c["calibrator"]}
+    if "tools_disagree" in c:
+        out["tools_disagree"] = c["tools_disagree"]
+    return out
 
 
 def triage_case(ctx: CaseContext) -> dict:
@@ -207,9 +285,14 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          "Measure liver and lesion volumes/diameters at original resolution from the voxel spacing.",
          ("segment_liver_tumour",)),
     Tool("quality_check", quality_check, "Run automatic quality-control checks on the first read.", ("measure_findings",)),
+    Tool("vlm_second_read", vlm_second_read,
+         "Ask the vision-language model (MedGemma) for an independent read of slices through the liver: "
+         "its probability that a liver tumour is present and a short unverified description.",
+         ("measure_findings",)),
     Tool("estimate_confidence", estimate_confidence,
-         "Turn the raw tumour score into a calibrated probability and an uncertainty estimate.",
-         ("segment_liver_tumour",)),
+         "Combine the segmenter score and the vision-language read into one calibrated tumour probability "
+         "with an uncertainty estimate.",
+         ("segment_liver_tumour", "vlm_second_read")),
     Tool("triage_case", triage_case, "Assign a worklist priority and triage category.",
          ("estimate_confidence", "quality_check")),
     Tool("apply_reader_policy", apply_reader_policy,

@@ -1,4 +1,4 @@
-"""Synthetic readers for a controlled human-AI experiment.
+"""Simulated readers for a controlled human-AI experiment on the LiTS cases.
 
 Each reader follows a *sequential reading protocol* (an initial independent impression,
 then the AI suggestion, then the final decision), which is how automation bias is

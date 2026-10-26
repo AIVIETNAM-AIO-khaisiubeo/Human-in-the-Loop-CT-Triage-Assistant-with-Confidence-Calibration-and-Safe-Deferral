@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "radagent"
-version = "0.1.0"
+version = "0.2.0"
 description = "ReaderAdapt-Liver: a self-adapting, radiologist-centred first-read agent for liver CT (research prototype)"
 requires-python = ">=3.10"
 authors = [{name = "Nguyen Duy Khai"}]
@@ -12,6 +12,8 @@ license = {text = "MIT"}
 
 [project.optional-dependencies]
 deep = ["torch>=2.1", "timm>=0.9.16"]
+vlm = ["transformers>=4.50.0", "accelerate>=0.34", "huggingface_hub>=0.25", "packaging>=23.0",
+       "bitsandbytes>=0.43; platform_system == 'Linux'"]
 
 [tool.setuptools.packages.find]
 include = ["radagent*"]

@@ -1,13 +1,18 @@
 """ReaderAdapt-Liver - interactive review app.
 
-    streamlit run app/streamlit_app.py -- --run outputs/demo
+    python -m streamlit run app/streamlit_app.py -- --run outputs/lits
+
+(or set the environment variable RA_RUN=outputs/lits). Data: LiTS17. Models: ViT-UNETR 2.5D
+segmenter + MedGemma 1.5 second reader.
 
 Research prototype. Every output is a research prediction, not for clinical use.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -54,7 +59,7 @@ def _cli_run() -> str | None:
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--run", default=None)
     args, _ = ap.parse_known_args(sys.argv[1:])
-    return args.run
+    return args.run or os.environ.get("RA_RUN")
 
 
 @st.cache_data(show_spinner=False)
@@ -79,7 +84,21 @@ cli = _cli_run()
 if cli and Path(cli).resolve() not in runs and (Path(cli) / "cases").exists():
     runs.insert(0, Path(cli).resolve())
 if not runs:
-    st.error("No finished run found. Create one first:  `python -m radagent all --config configs/demo.yaml`")
+    st.title("ReaderAdapt-Liver")
+    st.markdown(f"<div class='ra-banner'>⚠️ {RESEARCH_BANNER}</div>", unsafe_allow_html=True)
+    st.warning("No finished run was found in `outputs/`. The website shows the results of a pipeline run on LiTS17.")
+    st.markdown("""
+**Create a run (GPU needed, about 1-2 hours on Colab):**
+1. Open `notebooks/colab_lits_pipeline.ipynb` in Google Colab with a GPU runtime.
+2. Add the Colab secrets `KAGGLE_API_TOKEN` (LiTS download) and `HF_TOKEN` (MedGemma, after accepting the
+   terms on the `google/medgemma-1.5-4b-it` model page).
+3. Run all cells. The last cell either opens this website directly from Colab, or downloads `lits_run.zip`.
+
+**Then, on your computer:** unzip `lits_run.zip` into the `outputs/` folder of this repository and start
+`python -m streamlit run app/streamlit_app.py -- --run outputs/lits`.
+
+Or run the steps yourself on a GPU machine: `python -m radagent all --config configs/lits.yaml`.
+""")
     st.stop()
 
 with st.sidebar:
@@ -144,10 +163,19 @@ st.markdown(f"<div class='ra-banner'>⚠️ {RESEARCH_BANNER} · public de-ident
 st.title("Reader-adaptive first read · liver CT")
 cal = R.get("calibration") or {}
 mc = R.get("model_card") or {}
-k1, k2, k3, k4, k5 = st.columns(5)
+k1, k2, k6, k3, k4, k5 = st.columns(6)
 k1.metric("Worklist", f"{len(wl)} cases", f"{int((wl.category == 'DEFERRED').sum())} deferred", delta_color="off")
 k2.metric("Segmenter", mc.get("backend", record.get("model", {}).get("backend", "-")),
-          f"val Dice T {mc.get('val_dice_slicewise', {}).get('tumour', float('nan')):.2f}", delta_color="off")
+          f"val Dice T {mc.get('val_dice_slicewise', {}).get('tumour', float('nan')):.2f}", delta_color="off",
+          help="Tumour Dice on the validation scans (slice-wise, model resolution).")
+_tools = cal.get("tools_test") or {}
+_n_vlm = sum(1 for r in records.values() if (r.get("vlm") or {}).get("status") == "ok")
+if _tools.get("medgemma"):
+    k6.metric("MedGemma", f"AUROC {_tools['medgemma']['auroc']:.2f}",
+              f"segmenter {_tools['segmenter']['auroc']:.2f}", delta_color="off",
+              help="Case-level AUROC on the test split: MedGemma's P(yes) vs the segmenter score.")
+else:
+    k6.metric("MedGemma", f"{_n_vlm} reads", "second reader", delta_color="off")
 if cal.get("test"):
     k3.metric("Test ECE", f"{cal['test']['after']['ece']:.3f}", f"{cal['test']['after']['ece'] - cal['test']['before']['ece']:+.3f} vs raw",
               delta_color="inverse")
@@ -168,8 +196,8 @@ with tabs[0]:
     if len(changed) and policy_name != "universal":
         st.info(f"Compared with the universal policy, {len(changed)} case(s) change category for this reader "
                 f"({int((changed.category == 'DEFERRED').sum())} deferred to an independent read).")
-    show = wl[["rank", "case_id", "triage", "ai_suggestion", "tumour_probability", "uncertainty", "tumour_ml",
-               "lesions", "status"]]
+    show = wl[["rank", "case_id", "triage", "ai_suggestion", "tumour_probability", "uncertainty", "medgemma",
+               "agree", "tumour_ml", "lesions", "status"]]
     st.dataframe(show, hide_index=True, height=min(640, 38 + 35 * len(show)), column_config={
         "rank": st.column_config.NumberColumn("#", width="small"),
         "case_id": "Case",
@@ -177,12 +205,18 @@ with tabs[0]:
         "ai_suggestion": "AI suggestion",
         "tumour_probability": st.column_config.ProgressColumn("Tumour probability", min_value=0.0, max_value=1.0, format="%.2f"),
         "uncertainty": st.column_config.ProgressColumn("Uncertainty", min_value=0.0, max_value=1.0, format="%.2f"),
+        "medgemma": st.column_config.NumberColumn("MedGemma P", format="%.2f",
+                                                  help="MedGemma's calibrated probability of a liver tumour"),
+        "agree": st.column_config.TextColumn("Segmenter vs MedGemma"),
         "tumour_ml": st.column_config.NumberColumn("Tumour (ml)", format="%.2f"),
         "lesions": st.column_config.NumberColumn("Lesions"),
         "status": "Review status",
     })
-    st.caption("Priority = 0.60 × calibrated probability + 0.25 × lesion-volume term + 0.15 × uncertainty "
-               "(uncertain cases are pulled up on purpose). Pick a case in the sidebar, then open **Case review**.")
+    w_ = cfg["triage"]["weights"]
+    st.caption(f"Priority = {w_['probability']:.2f} × calibrated probability + {w_['volume']:.2f} × lesion-volume term "
+               f"+ {w_['uncertainty']:.2f} × uncertainty, + {cfg['triage'].get('disagreement_bonus', 0.1):.2f} when the "
+               "segmenter and MedGemma disagree (uncertain and disputed cases are pulled up on purpose). "
+               "Pick a case in the sidebar, then open **Case review**.")
     with st.expander("Triage categories"):
         for k, v in CATEGORY_HELP.items():
             st.markdown(f"- {U.CATEGORY_ICON.get(k, '')} **{k}** - {v}")
@@ -251,9 +285,15 @@ with tabs[1]:
                             f"<span class='ra-pill'>uncertainty {c['uncertainty']:.2f} ({c['uncertainty_level']})</span>"
                             f"<span class='ra-pill'>threshold {policy.threshold:.2f} · {pill}</span>"
                             f"<div class='ra-muted' style='margin-top:8px'>{c['calibrator']}; "
-                            f"raw score {c['tumour_probability_raw']:.2f}; model disagreement "
-                            f"{c['uncertainty_components'].get('mutual_information', 0.0):.2f} bits</div></div>",
-                            unsafe_allow_html=True)
+                            f"segmenter raw score {c['tumour_probability_raw']:.2f}; model disagreement "
+                            f"{c['uncertainty_components'].get('mutual_information', 0.0):.2f} bits</div>"
+                            + (f"<div style='margin-top:8px'><span class='ra-pill'>segmenter "
+                               f"{c.get('segmenter_probability', 0):.2f}</span><span class='ra-pill'>MedGemma "
+                               f"{c['vlm_probability']:.2f}</span>"
+                               + ("<span class='ra-pill'>⚠️ the two AI tools disagree</span>" if c.get("tools_disagree")
+                                  else "<span class='ra-pill'>tools agree</span>") + "</div>"
+                               if c.get("vlm_probability") is not None else "")
+                            + "</div>", unsafe_allow_html=True)
             mm1, mm2, mm3 = st.columns(3)
             mm1.metric("Liver volume", f"{m.get('liver_volume_ml', 0):.0f} ml")
             mm2.metric("Tumour volume (AI)", f"{m.get('predicted_tumour_volume_ml', 0):.2f} ml")
@@ -269,6 +309,25 @@ with tabs[1]:
                     "mean_hu": st.column_config.NumberColumn("Mean HU", format="%.0f"),
                     "mean_probability": st.column_config.NumberColumn("Mean prob.", format="%.2f"),
                     "slice_range": "Slices"})
+            v = record.get("vlm") or {}
+            with st.expander("🔬 MedGemma second read (vision-language model)", expanded=False):
+                if v.get("status") != "ok":
+                    st.caption(f"No MedGemma read for this case: {v.get('reason', v.get('status', 'not run'))}.")
+                else:
+                    st.markdown(f"**{v.get('model', {}).get('model_id', 'VLM')}** read {v.get('n_images')} axial "
+                                f"slices through the predicted liver. P(\"yes, liver tumour\") = **{v['p_yes']:.2f}**"
+                                + (f", calibrated {c['vlm_probability']:.2f}" if c.get("vlm_probability") is not None else "")
+                                + ".")
+                    if "vlm_rgb" in arrs:
+                        st.image([im for im in arrs["vlm_rgb"]], width=96,
+                                 caption=[f"slice {int(z)}" for z in arrs["vlm_z"]])
+                        st.caption("What the model saw: red = wide window, green = soft tissue, blue = brain window "
+                                   "(Google's CT input format for MedGemma 1.5).")
+                    if v.get("text"):
+                        st.markdown("**Model text** (unverified; never used for measurements or triage):")
+                        st.text(v["text"])
+                    for note in (v.get("guard") or {}).get("notes", []):
+                        st.warning(f"Guardrail: {note}")
 
         st.divider()
         prev = reviews.get(case_id)
@@ -420,6 +479,20 @@ with tabs[3]:
 # =========================================================================== evaluation
 with tabs[4]:
     fig_dir = store.p("figures")
+    if _tools:
+        st.markdown("#### The AI tools on the held-out test split")
+        from radagent.plots import tool_names
+
+        seg_n, vlm_n = tool_names(cfg)
+        names = {"segmenter": f"Segmenter score - {seg_n} (Platt)", "medgemma": f"{vlm_n} P(yes) (Platt)",
+                 "fused": f"Fused: segmenter + {vlm_n} (logistic)"}
+        st.dataframe(pd.DataFrame([{"tool": names.get(k, k), "cases": r["n"], "with tumour": r["n_pos"],
+                                    "AUROC": r["auroc"], "Brier": r["brier"], "ECE": r["ece"], "NLL": r["nll"]}
+                                   for k, r in _tools.items()]).round(3), hide_index=True)
+        fit = cal.get("fit", {})
+        st.caption(f"Each tool calibrated on the calib split only. Used for the worklist: "
+                   f"**{cal.get('calibrator', {}).get('description', '-')}**, selected by cross-validated NLL "
+                   f"{fit.get('cv_nll', {})}. Few tumour-free LiTS cases make specificity estimates noisy.")
     s = R.get("summary")
     if s is not None:
         st.markdown("#### Policy comparison on the held-out test split (simulated readers)")
@@ -428,8 +501,8 @@ with tabs[4]:
         show["reader"] = show["reader"].map(lambda r: reader_names.get(r, r))
         st.dataframe(show[["reader", "policy", "accuracy", "sensitivity", "specificity", "harmful_acceptance_rate",
                            "over_reliance", "deferral_rate", "actions_per_case", "threshold"]].round(3), hide_index=True)
-    for name, title in (("policy_comparison.png", "Policies × readers"), ("benefit_by_reader.png", "RQ1 benefit spread"),
-                        ("learning_curve.png", "RQ3 learning curve"), ("calibration_reliability.png", "Calibration"),
+    for name, title in (("ai_tools.png", "Segmenter vs MedGemma"), ("policy_comparison.png", "Policies × readers"),
+                        ("benefit_by_reader.png", "RQ1 benefit spread"), ("learning_curve.png", "RQ3 learning curve"), ("calibration_reliability.png", "Calibration"),
                         ("risk_coverage.png", "Selective prediction"), ("triage_lift.png", "Triage"),
                         ("segmentation_quality.png", "Segmentation")):
         f = fig_dir / name
@@ -459,12 +532,29 @@ with tabs[5]:
     cpl, cbtn = st.columns([1, 1])
     planner_choice = cpl.radio("Re-run the agent on this case with", ["rule", "llm"], horizontal=True,
                                help="LLM = any OpenAI-compatible server (e.g. Ollama) configured under agent.llm")
-    if cbtn.button("🤖 Re-run agent (uses cached perception)"):
+    from radagent.data.lits import locate
+
+    ct_ok = Path(locate(str(store.manifest().set_index("case_id").loc[case_id, "ct_path"]), cfg)).exists()
+    torch_ok = importlib.util.find_spec("torch") is not None
+    can_recompute = ct_ok and (torch_ok or cfg["segmenter"]["backend"] == "plugin")
+    recompute = cpl.toggle("Recompute from the CT file (runs the segmenter and MedGemma now)", value=False,
+                           disabled=not can_recompute,
+                           help="Needs the LiTS CT on this machine and PyTorch (a GPU for MedGemma). "
+                                + ("" if can_recompute else
+                                   ("CT file not found here. " if not ct_ok else "") +
+                                   ("PyTorch not installed. " if not torch_ok else "")))
+    label = "🤖 Run segmentation + MedGemma now" if recompute else "🤖 Re-run agent (uses cached perception)"
+    if cbtn.button(label):
         from radagent.pipeline import run_single_case
 
-        with st.spinner("Agent running ..."):
-            rec2, tr2 = run_single_case(cfg, case_id, planner_choice, reader_policy=policy)
+        with st.spinner("Segmenting the CT and asking MedGemma (first call loads the models) ..." if recompute
+                        else "Agent running ..."):
+            rec2, tr2 = run_single_case(cfg, case_id, planner_choice, reader_policy=policy, recompute=recompute)
         st.session_state["rerun_trace"] = tr2
+        if recompute:
+            st.success("Recomputed - the case record, viewer images and report were updated.")
+            _load_run_cached.clear()
+            st.rerun()
     if "rerun_trace" in st.session_state and st.session_state["rerun_trace"]["case_id"] == case_id:
         tr2 = st.session_state["rerun_trace"]
         st.markdown(f"**Re-run:** planner {tr2['planner']} → {tr2['status']}, "
@@ -478,11 +568,16 @@ with tabs[5]:
 with tabs[6]:
     st.markdown("""
 #### What this prototype does
+Data: **LiTS17** (Liver Tumor Segmentation Challenge, ISBI/MICCAI 2017; Kaggle mirror, 131 CT volumes with
+reference masks).
+
 1. **Agentic first read** - a planner (deterministic rules, or an open LLM via any OpenAI-compatible server) calls
-   tools in a guarded order: load study → segment liver/tumour (stochastic passes) → measure at original resolution
-   → quality control → calibrated confidence → triage → (reader policy) → deterministic report.
-2. **Calibration** - the case-level tumour score is calibrated on a separate split (temperature/Platt, chosen by
-   cross-validated NLL), with Brier score, ECE and reliability diagrams before/after.
+   tools in a guarded order: load study → segment liver/tumour with the **ViT-UNETR 2.5D** (stochastic passes) →
+   measure at original resolution → quality control → **MedGemma 1.5 second read** of slices through the liver →
+   calibrated confidence → triage → (reader policy) → report.
+2. **Calibration** - the segmenter score and MedGemma's P(yes) are calibrated on a separate split (alone or fused,
+   chosen by cross-validated NLL), with Brier score, ECE and reliability diagrams before/after. When the two AI tools
+   disagree, the case is flagged and moved up the worklist.
 3. **Learning from corrections** - accept/edit/reject actions (sequential protocol) teach the system each reader's
    *trust curve*; a reader-specific threshold and deferral rule are chosen to minimise that reader's expected error.
 4. **Evaluation** - universal vs reader-specific vs deferral policies on the same held-out cases with common random
@@ -491,11 +586,12 @@ with tabs[6]:
     st.graphviz_chart("""
 digraph G { rankdir=LR; node [shape=box, style="rounded", fontname="Helvetica", fontsize=10];
   ct [label="CT volume\\n(NIfTI, LiTS)"]; plan [label="Planner\\nrule | open LLM"]; guard [label="Guardrails\\npreconditions"];
-  seg [label="Segmenter tool\\nViT-UNETR / U-Net / GBM"]; meas [label="Measure\\n(voxel spacing)"]; qc [label="Quality\\ncontrol"];
+  seg [label="Segmenter tool\\nViT-UNETR 2.5D"]; meas [label="Measure\\n(voxel spacing)"]; qc [label="Quality\\ncontrol"];
+  vlm [label="Second reader\\nMedGemma 1.5"];
   conf [label="Calibrated\\nconfidence"]; tri [label="Triage"]; pol [label="Reader policy\\nthreshold + defer"];
   rep [label="Report\\ntemplate"]; ui [label="Review UI\\naccept / edit / reject"]; fb [label="Feedback log"];
   fit [label="Per-reader\\nfit (trust curve)"];
-  ct -> seg; plan -> guard -> seg; seg -> meas -> qc -> conf -> tri -> pol -> rep -> ui -> fb -> fit -> pol;
+  ct -> seg; ct -> vlm; plan -> guard -> seg; seg -> meas -> qc -> vlm -> conf -> tri -> pol -> rep -> ui -> fb -> fit -> pol;
 }
 """)
     st.markdown(f"Run directory: `{store.root}` · config: `{store.root / 'config_used.yaml'}`")

@@ -1,9 +1,0 @@
-{
-  "method": "platt",
-  "T": 1.0,
-  "a": 1.0053082768199175,
-  "b": -1.3547886284391832,
-  "n_fit": 31,
-  "note": "selected by 5-fold CV NLL on the calibration split",
-  "description": "Platt scaling (a = 1.005, b = -1.355)"
-}

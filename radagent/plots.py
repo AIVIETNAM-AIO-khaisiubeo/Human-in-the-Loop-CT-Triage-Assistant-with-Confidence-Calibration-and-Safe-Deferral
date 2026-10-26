@@ -288,15 +288,86 @@ def segmentation_figure(records: list[dict], path: Path) -> str | None:
     return _save(fig, path)
 
 
+def _roc(score: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    order = np.argsort(-score, kind="mergesort")
+    s, yy = score[order], y[order]
+    keep = np.r_[np.where(np.diff(s) != 0)[0], len(s) - 1]       # one point per distinct threshold
+    tp, fp = np.cumsum(yy)[keep], np.cumsum(1 - yy)[keep]
+    return np.r_[0, fp / max(1, (1 - y).sum())], np.r_[0, tp / max(1, y.sum())]
+
+
+SEG_NAMES = {"vitunetr": "ViT-UNETR 2.5D", "unet25d": "2.5D U-Net"}
+
+
+def tool_names(cfg: dict) -> tuple[str, str]:
+    seg = cfg["segmenter"]["backend"]
+    vlm = cfg.get("vlm", {})
+    vname = "MedGemma 1.5" if vlm.get("backend") == "medgemma" else str(vlm.get("plugin") or vlm.get("backend"))
+    return SEG_NAMES.get(seg, str(cfg["segmenter"].get("plugin") or seg).split(":")[-1]), vname.split(":")[-1]
+
+
+def ai_tools_figure(records: list[dict], path: Path, metrics: dict | None = None,
+                    names: tuple[str, str] = ("ViT-UNETR 2.5D", "MedGemma 1.5")) -> str | None:
+    """Segmenter vs MedGemma vs the score the agent used, on the test split."""
+    style()
+    recs = [r for r in records if r.get("split") == "test" and "reference" in r
+            and r["confidence"].get("vlm_probability_raw") is not None]
+    if len(recs) < 3:
+        return None
+    y = np.array([int(r["reference"]["tumour_present"]) for r in recs])
+    if y.min() == y.max():
+        return None
+    seg = np.array([r["confidence"]["tumour_probability_raw"] for r in recs])
+    vlm = np.array([r["confidence"]["vlm_probability_raw"] for r in recs])
+    used = np.array([r["confidence"]["tumour_probability"] for r in recs])
+    tools = (metrics or {}).get("tools_test", {})
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.4, 4.3))
+    a1.plot([0, 1], [0, 1], color=MUTED, lw=1.2)
+    for (name, score, key), col in zip(((f"Segmenter: {names[0]}", seg, "segmenter"), (names[1], vlm, "medgemma"),
+                                        ("Used by the agent", used, None)), (SERIES[0], SERIES[1], INK)):
+        fx, ty = _roc(score, y)
+        auc = tools.get(key, {}).get("auroc") if key else None
+        if auc is None:
+            from radagent.calibration import auroc
+            auc = auroc(score, y)
+        a1.plot(fx, ty, color=col, lw=2.2 if key is None else 1.8,
+                ls="--" if key is None else "-", label=f"{name} (AUROC {auc:.2f})")
+    a1.set_xlabel("False-positive rate")
+    a1.set_ylabel("True-positive rate")
+    a1.set_title("Case-level tumour detection", loc="left")
+    a1.legend(loc="lower right")
+    a1.set_xlim(-0.02, 1.02)
+    a1.set_ylim(-0.02, 1.02)
+    for g, col, lab, mk in ((1, SERIES[1], "Tumour (reference)", "o"), (0, SERIES[0], "No tumour (reference)", "s")):
+        m = y == g
+        a2.scatter(seg[m], vlm[m], s=44, color=col, marker=mk, edgecolor=SURFACE, linewidth=1.2, label=lab, zorder=3)
+    dis = np.array([bool(r["confidence"].get("tools_disagree")) for r in recs])
+    if dis.any():
+        a2.scatter(seg[dis], vlm[dis], s=120, facecolor="none", edgecolor=INK, linewidth=1.2,
+                   label="Flagged: tools disagree", zorder=4)
+    a2.axhline(0.5, color=AXIS, lw=1)
+    a2.axvline(0.5, color=AXIS, lw=1)
+    a2.set_xlim(-0.02, 1.02)
+    a2.set_ylim(-0.02, 1.02)
+    a2.set_xlabel("Segmenter score (raw)")
+    a2.set_ylabel(f"{names[1]} P(yes) (raw)")
+    a2.set_title("Do the two AI tools agree?", loc="left")
+    a2.legend(loc="best", fontsize=8.5)
+    fig.tight_layout()
+    return _save(fig, path)
+
+
 def make_all(store, cfg: dict) -> list[str]:
     from radagent.store import load_json
 
     figs = []
     fd = store.p("figures")
     cm = store.p("calibration", "calibration_metrics.json")
-    if cm.exists():
-        figs.append(reliability_figure(load_json(cm), fd / "calibration_reliability.png"))
+    metrics = load_json(cm) if cm.exists() else None
+    if metrics:
+        figs.append(reliability_figure(metrics, fd / "calibration_reliability.png"))
     records = store.records()
+    figs.append(ai_tools_figure(records, fd / "ai_tools.png", metrics, tool_names(cfg)))
     figs += [segmentation_figure(records, fd / "segmentation_quality.png"),
              risk_coverage_figure(records, fd / "risk_coverage.png", cfg["triage"]["suggest_threshold"]),
              triage_lift_figure(records, fd / "triage_lift.png")]
