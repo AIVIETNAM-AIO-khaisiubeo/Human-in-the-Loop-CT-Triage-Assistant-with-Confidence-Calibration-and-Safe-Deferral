@@ -40,7 +40,7 @@ independent read for readers (and cases) where its help would do more harm than 
 | | Deterministic, template-based **report draft**; MedGemma's text is quoted verbatim as *unverified* and checked for sizes the measurement tool did not produce | `radagent/report.py`, `radagent/vlm/guard.py` |
 | **Aim 2 - learning from corrections** | Accept / edit / reject feedback log, **per-reader trust curve**, reader-specific threshold and **learning to defer** | `radagent/policy.py`, `radagent/readers/` |
 | **Aim 3 - evaluation** | Simulated readers A (over-reliant), B (sceptical), C (inconsistent); universal vs reader-specific vs deferral policies on the same held-out LiTS cases; RQ1-RQ3 analyses; segmenter vs MedGemma vs fused | `radagent/experiments.py`, `notebooks/evaluation.ipynb` |
-| Reading interface | Streamlit website: worklist (with MedGemma column), CT viewer with overlays + uncertainty, MedGemma slices and text, sequential reading protocol, accept/edit/reject, report, live policy adaptation, evaluation, agent trace with **recompute from the CT** | `app/streamlit_app.py` |
+| Reading interface | Calm, accessible website designed around the radiologist's reading journey (deep navy, soft teal, white; WCAG AA contrast; 48 px touch targets; works on workstation, tablet and phone): worklist cards, CT viewer, independent impression first, AI suggestion in plain words with MedGemma agreement, accept / edit / reject, report, adaptation, performance and audit views - see [`docs/UX_DESIGN.md`](docs/UX_DESIGN.md) | `app/` |
 
 
 
@@ -134,7 +134,7 @@ python -m radagent all --config configs/lits.yaml        # or step by step:
 ### 4.2 Website on your own computer (no GPU needed)
 
 ```bash
-pip install -r requirements.txt
+pip install -U -r requirements.txt          # needs Streamlit 1.59 or newer
 # unzip lits_run.zip into the outputs/ folder, then
 python -m streamlit run app/streamlit_app.py -- --run outputs/lits
 ```
@@ -166,25 +166,35 @@ takes over and the trace says so.
 
 ## 5. Five-minute walkthrough
 
-1. **Worklist** tab - cases ranked by the agent (🔴 urgent, 🟠 suspicious, 🟣 uncertain, 🟢 likely normal,
-   🧑‍⚕️ deferred), with MedGemma's probability and whether it agrees with the segmenter. Switch the sidebar
-   *Decision policy* and *Reader* and watch categories, the suggestion threshold and the deferred cases change.
-2. **Case review** - pick a case in the sidebar. Scroll the LiTS CT; toggle the AI liver/lesion outlines and the
-   voxel-entropy map. The AI card shows the segmenter, MedGemma and whether they disagree; the **MedGemma second
-   read** panel shows the exact slices it was given, its text and the guardrail notes. As *Live reader*, the
-   **sequential protocol** asks for your independent impression before the AI suggestion is revealed; then
-   **Accept / Edit (keep or drop lesions) / Reject**.
-3. Choose *Reader B - sceptical* and press **⏩ Simulate N reads** - the policy is refitted after every read.
-4. **Reader adaptation** - the reader's threshold/deferral trajectory and the learned *trust curve* (with the
-   true simulated curve for comparison).
-5. **Report draft** - the deterministic report with the SECOND READ section, including the reader's decision;
-   downloadable.
-6. **Evaluation** - segmenter vs MedGemma vs fused on the test split, calibration, policy comparison, RQ1/RQ3
-   figures. **Agent trace** - every tool call, reason, timing; re-run the case with the rule or LLM planner, or
-   recompute it from the CT file.
+The website follows a radiologist's reading journey (design notes and colour tokens in
+[`docs/UX_DESIGN.md`](docs/UX_DESIGN.md)). The navy header always shows who is reading, the active decision
+policy and that this is a research prototype; below it a status strip counts the cases *to read*, *urgent*,
+*AI tools disagree*, *independent reads* and *reviewed*.
 
-Turn on *Research mode* in the sidebar to overlay the reference annotation and label each decision as a correct
-acceptance, harmful acceptance, correct or wrong rejection.
+1. **Worklist** - one card per case in priority order: category badge (shape + word + colour), the AI suggestion
+   and *why* the case is ranked there, the calibrated probability against the threshold, MedGemma's agreement and
+   the review status. **Open case** goes straight to the read; *Compact table* gives one row per case on large
+   screens. Switch *Reading as* and *Decision policy* in **Session settings** (left sidebar; on a phone, the menu at
+   the top left) and watch categories, the threshold and the independent reads change.
+2. **Read case** - a step indicator guides *1 Your impression → 2 AI suggestion → 3 Your decision → 4 Report*.
+   The CT viewer opens with AI overlays hidden; record **Tumour present / No tumour** first, then the AI suggestion
+   appears in plain words: calibrated probability, how confident the AI is, whether the segmenter and MedGemma
+   agree, why the case was prioritised, the measurements and the lesion table. MedGemma's slices and its unverified
+   text, and the technical details, are one tap away. Then **Accept / Reject** or **Edit** (keep or drop lesions);
+   after saving, **Next case** or **View report**. **Previous / Next** move along the worklist without the sidebar.
+3. Choose *Reader B - sceptical* in Session settings and press **Simulate the next N reads** - the policy is
+   refitted after every read.
+4. **AI adaptation** - the reader's threshold and deferral rule in words, how they evolved, and the learned
+   *trust curve* (with the true simulated curve for comparison).
+5. **Report** - the deterministic report with the SECOND READ section and the reader's decision; copy or download.
+6. **Performance** - segmenter vs MedGemma vs combined on the test cases, calibration, simulated-reader policy
+   comparison and all figures. **Audit trail** - every tool call, reason and timing; re-run the case with the rule
+   or LLM planner, or recompute it from the CT file. **About** - intended use, what it is not for, and how a case
+   is pre-read.
+
+Turn on *Research mode* in Session settings to overlay the reference annotation and label each decision as a
+correct acceptance, harmful acceptance, correct or wrong rejection. A link such as
+`?view=read&case=lits_028` opens a case directly.
 
 ## 6. Methods
 
@@ -321,10 +331,13 @@ radagent/
   readers/       simulated reader profiles, feedback log
   experiments.py controlled reader experiment, RQ1-RQ3 aggregates
   plots.py, pipeline.py, cli.py, config.py, store.py
-app/             streamlit_app.py (website), ui_core.py (rendering + live adaptation, Streamlit-free)
+app/             streamlit_app.py (website, one view per journey stage), ui_theme.py (colour tokens, CSS, accessible
+                 HTML components), ui_core.py (rendering + live adaptation, Streamlit-free)
+docs/            UX_DESIGN.md (radiologist journey, design rules, contrast table)
 configs/         lits.yaml (LiTS17 + ViT-UNETR + MedGemma)
 notebooks/       colab_lits_pipeline.ipynb (full run on Colab), evaluation.ipynb (reproducible evaluation)
-tests/           unit + end-to-end tests; fixtures/ = small CTs in the Kaggle LiTS layout and stand-in models
+tests/           unit + end-to-end tests, website tests (Streamlit AppTest); fixtures/ = small CTs in the Kaggle
+                 LiTS layout and stand-in models
 ```
 
 **Swapping a model.** Both tools are adapter classes behind small interfaces, selected in the config:
@@ -340,7 +353,9 @@ a wrapper around its own generation code. `vlm: {backend: none}` runs the agent 
 **Tests** need no GPU and no download: they write small CT volumes in the Kaggle LiTS layout and run the whole
 pipeline (manifest → segmenter → MedGemma tool → calibration → agent → reports → reader experiment → figures, and a
 recompute from the CT) with stand-in adapter classes; MedGemma's token scoring, prompt layout and text guard are
-tested with a fake tokenizer.
+tested with a fake tokenizer. `tests/test_app.py` drives the real website with Streamlit's AppTest through the
+whole reading journey (worklist → impression → AI suggestion → accept / edit / independent read → next case →
+report, every view for every reader, simulated reads, feedback reset) and checks the colour palette against WCAG AA.
 
 ```bash
 pip install -r requirements-dev.txt && pytest -q

@@ -10,4 +10,4 @@ pyyaml>=6.0
 requests>=2.31
 pillow>=10.0
 kagglehub>=0.3.4          # downloads the two LiTS17 Kaggle datasets
-streamlit>=1.36
+streamlit>=1.59              # accessible segmented controls (radio semantics), AppTest support

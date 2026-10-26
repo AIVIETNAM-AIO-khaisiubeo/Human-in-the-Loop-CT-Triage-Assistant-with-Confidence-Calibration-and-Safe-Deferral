@@ -10,9 +10,11 @@ import pandas as pd
 from scipy import ndimage as ndi
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _p in (ROOT, Path(__file__).resolve().parent):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
+from radagent.confidence import uncertainty_level  # noqa: E402
 from radagent.config import load_config  # noqa: E402
 from radagent.policy import ReaderPolicy, case_table, fit_policy, universal_policy  # noqa: E402
 from radagent.readers.feedback import FeedbackEvent, FeedbackStore  # noqa: E402
@@ -20,6 +22,7 @@ from radagent.readers.profiles import N_DRAWS, ReaderProfile, load_profiles, sim
 from radagent.report import suggestion_text  # noqa: E402
 from radagent.store import RunStore, load_json  # noqa: E402
 from radagent.triage import CATEGORY_ORDER, triage  # noqa: E402
+from ui_theme import CATEGORY_STYLE, OVERLAY  # noqa: E402
 
 LIVE_READER = "live"
 POLICY_CHOICES = {
@@ -28,15 +31,17 @@ POLICY_CHOICES = {
     "reader_threshold": "Reader-specific threshold",
     "reader_threshold_defer": "Reader-specific + deferral",
 }
-CATEGORY_ICON = {"QC FAIL": "⚠️", "URGENT": "🔴", "SUSPICIOUS": "🟠", "UNCERTAIN": "🟣", "LIKELY NORMAL": "🟢",
-                 "DEFERRED": "🧑‍⚕️"}
+# text glyphs for places that cannot render HTML (tables, downloads); shape-coded like the badges
+CATEGORY_ICON = {"QC FAIL": "■", "URGENT": "▲", "SUSPICIOUS": "◆", "UNCERTAIN": "◐", "LIKELY NORMAL": "○",
+                 "DEFERRED": "●"}
+CATEGORY_LABEL = {k: v[1] for k, v in CATEGORY_STYLE.items()}
 
-# overlay colours (RGB)
-C_LIVER = np.array([27, 175, 122])      # aqua
-C_LESION = np.array([235, 104, 52])     # orange
-C_SELECTED = np.array([237, 161, 0])    # yellow
-C_REF = np.array([240, 239, 236])       # near-white
-C_UNC = np.array([232, 123, 164])       # magenta
+# overlay colours (RGB) - see ui_theme.OVERLAY
+C_LIVER = np.array(OVERLAY["liver"])
+C_LESION = np.array(OVERLAY["lesion"])
+C_SELECTED = np.array(OVERLAY["selected"])
+C_REF = np.array(OVERLAY["reference"])
+C_UNC = np.array(OVERLAY["uncertainty"])
 
 
 # --------------------------------------------------------------------------- run loading
@@ -182,10 +187,17 @@ def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, review
             suggestion = suggestion_text(c["tumour_probability"], policy.threshold)
         rv = reviews.get(cid)
         vp = c.get("vlm_probability")
+        reasons = list(t.get("reasons", []))
+        if shown_cat == "DEFERRED":
+            reasons = [f"AI suggestion withheld for this reader ({d.get('reason', 'reader policy')})"] + reasons
+        reasons = [humanize(x) for x in reasons]
         rows.append({"case_id": cid, "priority": t["priority"], "category": shown_cat,
                      "medgemma": float(vp) if vp is not None else float("nan"),
-                     "agree": ("⚠️ disagree" if c.get("tools_disagree") else "✓") if vp is not None else "-",
-                     "triage": f"{CATEGORY_ICON.get(shown_cat, '')} {shown_cat}", "ai_suggestion": suggestion,
+                     "agree": ("disagree" if c.get("tools_disagree") else "agree") if vp is not None else "-",
+                     "reasons": "; ".join(str(x) for x in reasons),
+                     "unc_level": uncertainty_level(float(c["uncertainty"])),
+                     "triage": f"{CATEGORY_ICON.get(shown_cat, '')} {CATEGORY_LABEL.get(shown_cat, shown_cat)}",
+                     "ai_suggestion": suggestion,
                      "tumour_probability": c["tumour_probability"], "uncertainty": c["uncertainty"],
                      "tumour_ml": r["measurements"].get("predicted_tumour_volume_ml", 0.0),
                      "lesions": r["measurements"].get("n_lesions", 0),
@@ -240,6 +252,22 @@ def outcome_label(ev: dict, gt_present: bool) -> str:
     if ev["action"] in ("accept", "edit"):
         return "correct acceptance" if ai_ok else "HARMFUL acceptance (AI was wrong)"
     return "correct rejection (AI was wrong)" if not ai_ok else "wrong rejection (AI was right)"
+
+
+def humanize(reason: str) -> str:
+    """Make a triage/policy reason readable: symbols and plain words instead of code-like notation."""
+    r = str(reason).replace(">=", "≥").replace("<=", "≤")
+    r = r.replace("p = ", "probability ").replace("p ", "probability ", 1) if r.startswith("p ") else \
+        r.replace("p = ", "probability ")
+    return r[:1].upper() + r[1:]
+
+
+def neighbours(order: list[str], case_id: str) -> tuple[str | None, str | None]:
+    """Previous / next case in worklist order."""
+    if case_id not in order:
+        return None, (order[0] if order else None)
+    i = order.index(case_id)
+    return (order[i - 1] if i > 0 else None), (order[i + 1] if i + 1 < len(order) else None)
 
 
 __all__ = ["CATEGORY_ORDER", "LIVE_READER", "POLICY_CHOICES", "find_runs", "load_run", "render_slice", "worklist",
