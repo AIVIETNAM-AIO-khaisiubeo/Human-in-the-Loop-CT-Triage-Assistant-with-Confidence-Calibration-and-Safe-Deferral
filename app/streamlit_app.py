@@ -522,10 +522,10 @@ def _viewer(arrs: dict, hide: bool, nz: int, sp) -> None:
         v3.button("Reset view", key="reset_view", on_click=_reset_view, args=(slice_key, start),
                   icon=":material/restart_alt:", width="stretch")
         t1, t2, t3, v2 = cols("viewopts", [1, 1, 1, 1.2], vertical_alignment="center")
-        show_liver = t1.toggle("AI liver outline", disabled=hide, key="ov_liver")
-        show_les = t2.toggle("AI lesions", disabled=hide, key="ov_lesions")
-        show_unc = t3.toggle("Uncertainty map", disabled=hide, key="ov_unc")
-        with v2, st.popover("Zoom and opacity", icon=":material/tune:", width="stretch"):
+        show_liver = t1.toggle("AI liver", disabled=hide, key="ov_liver", help="AI liver outline")
+        show_les = t2.toggle("AI lesions", disabled=hide, key="ov_lesions", help="AI lesion outline and fill")
+        show_unc = t3.toggle("Uncertainty", disabled=hide, key="ov_unc", help="Voxel uncertainty map")
+        with v2, st.popover("View options", icon=":material/tune:", width="stretch", help="Zoom, pan, overlay opacity, custom window"):
             st.slider("Zoom", 1.0, 3.0, step=0.25, key="zoom", format="%.2f×")
             st.slider("Pan left / right", -1.0, 1.0, step=0.1, key="pan_x")
             st.slider("Pan up / down", -1.0, 1.0, step=0.1, key="pan_y")
