@@ -109,10 +109,12 @@ def measure(view_hu: np.ndarray, spacing: tuple, seg: SegOutput, cfg: dict) -> d
             les["id"] = k
 
     liver_ml = float(liver_o.sum()) * vox_ml
+    lz = np.where(liver_o.any(axis=(1, 2)))[0]
     tumour_ml = float(tumour_o.sum()) * vox_ml
     meas = {
         "liver_found": True,
         "liver_volume_ml": round(liver_ml, 1),
+        "liver_slice_range": [int(seg.z0 + lz.min()), int(seg.z0 + lz.max())] if lz.size else None,
         "liver_mean_hu": round(float(hu_crop[liver_o & ~tumour_o].mean()) if (liver_o & ~tumour_o).any() else float("nan"), 1),
         "predicted_tumour_volume_ml": round(tumour_ml, 3),
         "tumour_burden_pct": round(100.0 * tumour_ml / liver_ml, 3) if liver_ml > 0 else 0.0,

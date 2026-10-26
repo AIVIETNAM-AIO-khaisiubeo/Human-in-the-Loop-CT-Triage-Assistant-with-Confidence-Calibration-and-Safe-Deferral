@@ -71,51 +71,6 @@ def dice_from_counts(inter: float, a: float, b: float) -> float:
     return float(2 * inter / (a + b)) if (a + b) > 0 else 1.0
 
 
-# --------------------------------------------------------------------------- GBM
-def train_voxel_gbm(cfg: dict, manifest: pd.DataFrame) -> dict:
-    from radagent.models.voxel_gbm import FEATURE_NAMES, VoxelGBMSegmenter
-    from radagent.preprocess import stacks_25d
-
-    train_cases = load_split(manifest, "train", cfg)
-    val_cases = load_split(manifest, "val", cfg)
-    seg = VoxelGBMSegmenter(img_size=cfg["preprocess"]["img_size"]).fit(train_cases, cfg["segmenter"]["gbm"], seed=cfg["seed"])
-    # validation: ensemble-mean probabilities, pooled slice-wise Dice; also picks the
-    # tumour prior-shift correction (tumour pixels were over-sampled during training)
-    probs, gts = [], []
-    for case in val_cases:
-        img, lab = case["img"], case["lab"]
-        for b0 in range(0, len(img), 16):
-            zs = list(range(b0, min(len(img), b0 + 16)))
-            probs.append(seg.predict_batch(stacks_25d(img, zs)).mean(0))
-            gts.append(lab[zs])
-    P, G = np.concatenate(probs), np.concatenate(gts)
-
-    def val_dice(scale: float) -> dict:
-        q = P.copy()
-        q[:, 2] *= scale
-        pred = q.argmax(1)
-        out = {}
-        for name, pm, gm in (("liver", pred > 0, G > 0), ("tumour", pred == 2, G == 2)):
-            out[name] = round(dice_from_counts(int((pm & gm).sum()), int(pm.sum()), int(gm.sum())), 4)
-        return out
-
-    grid = {r: val_dice(r) for r in (1.0, 0.7, 0.5, 0.35, 0.25)}
-    best_r = max(grid, key=lambda r: grid[r]["tumour"])
-    seg.tumour_prior_scale = float(best_r)
-    val = grid[best_r]
-    print("[train] tumour prior scale on validation: " + ", ".join(f"{r}: {d['tumour']:.3f}" for r, d in grid.items())
-          + f" -> {best_r}")
-    path = checkpoint_path(cfg)
-    seg.save(path)
-    card = {"backend": "voxel_gbm", "checkpoint": str(path), "n_train_cases": len(train_cases),
-            "n_val_cases": len(val_cases), "val_dice_slicewise": val, "members": seg.n_passes,
-            "tumour_prior_scale": seg.tumour_prior_scale,
-            "features": FEATURE_NAMES}
-    _write_card(cfg, card)
-    print(f"[train] voxel_gbm saved to {path} | validation Dice liver {val['liver']:.3f} tumour {val['tumour']:.3f}")
-    return card
-
-
 def _write_card(cfg: dict, card: dict) -> None:
     d = run_dir(cfg) / "model"
     d.mkdir(parents=True, exist_ok=True)
@@ -290,7 +245,17 @@ def train_torch(cfg: dict, manifest: pd.DataFrame) -> dict:
 
 
 def train(cfg: dict, manifest: pd.DataFrame) -> dict:
-    if cfg["segmenter"]["backend"] == "voxel_gbm":
-        return train_voxel_gbm(cfg, manifest)
-    return train_torch(cfg, manifest)
+    backend = cfg["segmenter"]["backend"]
+    if backend == "plugin":
+        # An adapter may bring its own (pre-trained) weights; if it can be fitted, let it.
+        from radagent.models import checkpoint_path, load_segmenter
 
+        seg = load_segmenter(cfg)
+        card = {"backend": "plugin", "plugin": cfg["segmenter"]["plugin"]}
+        if hasattr(seg, "fit"):
+            card.update(seg.fit(cfg, manifest) or {})
+        checkpoint_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path(cfg).write_text(json.dumps(card, indent=2))
+        _write_card(cfg, card)
+        return card
+    return train_torch(cfg, manifest)

@@ -14,17 +14,19 @@ from typing import Any
 import yaml
 
 DEFAULTS: dict[str, Any] = {
-    "run_name": "demo",
+    "run_name": "lits",
     "output_root": "outputs",
     "seed": 13,
     # ------------------------------------------------------------------ data
     "data": {
-        "source": "synthetic",            # synthetic | lits
-        "root": "data/synthetic",         # synthetic phantoms are written here
-        "lits_dirs": [],                   # LiTS folders (kagglehub part1 + part2)
-        "n_cases": 120,                    # synthetic only
-        "max_cases": None,                 # optional cap (LiTS subset)
-        "split_strategy": "random",       # random | notebook_compatible
+        "source": "lits",                  # LiTS17 (Kaggle mirror) - the only source
+        # Folders that contain volume-*.nii / segmentation-*.nii. Empty -> downloaded
+        # (or found in the local cache) with kagglehub from the two Kaggle datasets below.
+        "lits_dirs": [],
+        "kaggle_datasets": ["andrewmvd/liver-tumor-segmentation",          # masks + volume_pt1..pt5
+                            "andrewmvd/liver-tumor-segmentation-part-2"],  # remaining volumes
+        "max_cases": None,                 # optional cap: proportional subset of every split
+        "split_strategy": "notebook_compatible",  # notebook_compatible | random
         "split_fractions": {"train": 0.40, "val": 0.07, "calib": 0.265, "test": 0.265},
         # notebook_compatible: reproduce the ViT-UNETR notebook split so that a
         # warm start from that checkpoint never sees a calibration/test case.
@@ -36,14 +38,15 @@ DEFAULTS: dict[str, Any] = {
     # ------------------------------------------------------------ preprocess
     "preprocess": {
         "hu_window": [-100, 250],          # soft-tissue / liver window (HU)
-        "img_size": 128,                   # in-plane size seen by the segmenter
-        "margin_slices": 8,                # slices kept around the liver for training
+        "img_size": 256,                   # in-plane size seen by the segmenter (LiTS slices are 512)
+        "margin_slices": 15,               # slices kept around the liver for training
     },
     # ------------------------------------------------------------- segmenter
     "segmenter": {
-        "backend": "voxel_gbm",           # vitunetr | unet25d | voxel_gbm
-        "checkpoint": None,                # default: <run>/model/<backend>.pt|.pkl
-        "init_from": None,                 # warm start, e.g. the 2-class ViT-UNETR .pt
+        "backend": "vitunetr",            # vitunetr | unet25d | plugin
+        "plugin": None,                    # backend: plugin -> "package.module:ClassName" (see radagent/models/__init__.py)
+        "checkpoint": None,                # default: <run>/model/<backend>.pt
+        "init_from": None,                 # warm start, e.g. the 2-class ViT-UNETR .pt from the liver notebook
         "vit_name": "vit_small_patch16_224.augreg_in21k_ft_in1k",
         "pretrained": True,                # ImageNet weights for the ViT encoder
         "decoder_dropout": 0.1,            # enables MC-dropout uncertainty
@@ -58,34 +61,44 @@ DEFAULTS: dict[str, Any] = {
         "class_weights": [1.0, 1.0, 3.0],  # background, liver, tumour (CE term)
         "tumour_oversample": 3.0,          # sampling weight of slices with tumour
         "device": "auto",
-        "gbm": {
-            "n_members": 3,                # bootstrap ensemble -> epistemic spread
-            "pixels_per_case": 6000,
-            "max_iter": 150,
-            "learning_rate": 0.1,
-            "max_leaf_nodes": 31,
-        },
+    },
+    # ------------------------------------------------------- vision-language
+    "vlm": {
+        "backend": "medgemma",            # medgemma | none | plugin
+        "plugin": None,                    # backend: plugin -> "package.module:ClassName"
+        "model_id": "google/medgemma-1.5-4b-it",
+        "device": "auto",
+        "dtype": "auto",                   # auto: bf16 on Ampere+ GPUs, else 4-bit weights + fp32 compute
+        "n_slices": 16,                    # axial slices sampled uniformly through the predicted liver
+        # MedGemma 1.5 was trained on CT slices with three windows in the RGB channels
+        # (Google's high_dimensional_ct_hugging_face notebook): wide, soft tissue, brain.
+        "windows": [[-1024, 1024], [-135, 215], [0, 80]],
+        "describe": True,                  # also generate a short free-text read (shown as unverified)
+        "max_new_tokens": 320,
+        "thumb_size": 160,                 # thumbnails of the slices it saw, for the website
     },
     # ------------------------------------------------------------- inference
     "inference": {
         "tta_flip": True,
         "mc_samples": 2,                   # stochastic passes per TTA view (torch)
-        "batch_size": 16,
+        "batch_size": 32,
         "min_lesion_ml": 0.1,              # smallest lesion reported / looked for by the case score
         "min_lesion_peak_prob": 0.7,       # a lesion candidate must reach this tumour probability somewhere
-        "viewer_size": None,               # None -> img_size
-        "viewer_max_slices": 96,
+        "viewer_size": 192,                # stored slice size for the website
+        "viewer_max_slices": 64,
         "eval_splits": ["calib", "test"],
     },
     # ------------------------------------------------------------ confidence
     "confidence": {
-        "method": "auto",                  # temperature | platt | auto (CV on calib)
+        # auto: cross-validated choice on the calib split between identity, temperature,
+        # Platt (segmenter score only), vlm (MedGemma only) and fused (both, logistic).
+        "method": "auto",
         "n_bins": 10,
         "target_min_tumour_ml": 0.0,       # reference "tumour present" if volume > this
     },
     # --------------------------------------------------------------- quality
     "quality": {
-        "liver_ml_range": [500.0, 4500.0],
+        "liver_ml_range": [300.0, 6000.0],
         "spacing_mm_range": [0.3, 8.0],
         "min_slices": 16,
         "max_tumour_outside_liver_frac": 0.25,
@@ -99,6 +112,7 @@ DEFAULTS: dict[str, Any] = {
         "urgent_diameter_mm": 20.0,
         "uncertain_flag": 0.85,            # bits of predictive entropy (p between ~0.28 and ~0.72)
         "volume_ref_ml": 50.0,
+        "disagreement_bonus": 0.10,        # priority added when segmenter and MedGemma disagree
         "weights": {"probability": 0.60, "volume": 0.25, "uncertainty": 0.15},
     },
     # ---------------------------------------------------------------- policy
@@ -119,7 +133,7 @@ DEFAULTS: dict[str, Any] = {
     # --------------------------------------------------------------- readers
     "readers": {
         "seeds": 30,
-        "learning_curve_n": [0, 5, 10, 15, 20, 25, 32],
+        "learning_curve_n": [0, 5, 10, 15, 20, 26],
         "profiles": {
             "reader_a": {
                 "name": "Reader A - over-reliant",

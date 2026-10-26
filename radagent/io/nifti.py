@@ -2,7 +2,8 @@
 
 ``nibabel`` is used when it is installed (it is in ``requirements.txt``). A small,
 dependency-free NIfTI-1 reader/writer is kept as a fallback so that the geometry
-code and the synthetic-data generator can be tested in minimal environments.
+code and the test fixtures work in minimal environments. LiTS stores some volumes as
+float32/float64; ``load_nifti`` reads those chunk-wise and keeps integral HU as int16.
 Both paths return the same thing: the raw voxel array (as stored on disk) and the
 4x4 voxel-to-world affine (RAS+ world, millimetres).
 """
@@ -27,24 +28,68 @@ _DTYPES = {2: np.uint8, 4: np.int16, 8: np.int32, 16: np.float32, 64: np.float64
 _CODES = {np.dtype(v): k for k, v in _DTYPES.items()}
 
 
-def load_nifti(path: str | Path, use_nibabel: bool | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(data, affine)``. Integer CT data is kept as int16 to save memory."""
+def _to_compact(blocks, shape) -> np.ndarray:
+    """Assemble float blocks (along the last axis) into int16 when the values are integral HU/labels.
+
+    LiTS stores some CTs and masks as float32/float64. Converting block by block keeps the
+    peak memory at one block instead of a full float64 copy of a 512 x 512 x 900 volume.
+    """
+    out16 = np.empty(shape, dtype=np.int16)
+    out32 = None
+    z = 0
+    for blk in blocks:
+        n = blk.shape[-1]
+        if out32 is None:
+            fin = np.isfinite(blk)
+            r = np.round(np.where(fin, blk, 0))
+            if fin.all() and np.abs(r).max(initial=0) < 32767 and np.allclose(r, blk, atol=1e-3):
+                out16[..., z:z + n] = r.astype(np.int16)
+            else:  # not integral -> keep float32 from here on
+                out32 = out16.astype(np.float32)
+                del out16
+                out32[..., z:z + n] = blk.astype(np.float32)
+        else:
+            out32[..., z:z + n] = blk.astype(np.float32)
+        z += n
+    return out16 if out32 is None else out32
+
+
+def load_nifti(path: str | Path, use_nibabel: bool | None = None, chunk: int = 64) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(data, affine)``. Integral data (HU, labels) comes back as int16 to save memory."""
     path = str(path)
     if use_nibabel is None:
         use_nibabel = HAVE_NIBABEL
     if use_nibabel:
         img = nib.load(path)
-        data = np.asanyarray(img.dataobj)
         affine = np.asarray(img.affine, dtype=np.float64)
-    else:
-        data, affine = _read_nifti1(path)
+        shape = tuple(int(x) for x in img.shape)
+        if len(shape) == 4 and shape[3] == 1:
+            shape = shape[:3]
+        proxy = img.dataobj
+        disk = np.dtype(img.get_data_dtype())
+        slope, inter = getattr(proxy, "slope", 1.0), getattr(proxy, "inter", 0.0)
+        trivial_scale = (slope in (1.0, None) or np.isnan(slope)) and (inter in (0.0, None) or np.isnan(inter))
+        if disk.kind in "iub" and trivial_scale:
+            data = np.asanyarray(proxy)
+            if data.ndim == 4 and data.shape[3] == 1:
+                data = data[..., 0]
+            if data.dtype.itemsize > 2 or data.dtype == np.uint16:
+                if data.size and np.abs(data).max() < 32767:
+                    data = data.astype(np.int16)
+            return data, affine
+
+        def blocks():
+            for z0 in range(0, shape[2], chunk):
+                blk = np.asarray(proxy[:, :, z0:min(shape[2], z0 + chunk)] if len(img.shape) == 3
+                                 else proxy[:, :, z0:min(shape[2], z0 + chunk), 0])
+                yield blk
+
+        return _to_compact(blocks(), shape), affine
+    data, affine = _read_nifti1(path)
     if data.ndim == 4 and data.shape[3] == 1:
         data = data[..., 0]
-    if data.dtype.kind == "f" and data.size and np.all(np.isfinite(data[:: max(1, data.shape[0] // 8)])):
-        # LiTS CTs are sometimes stored as float; HU values fit int16 exactly.
-        rounded = np.round(data)
-        if np.abs(rounded).max() < 32767 and np.allclose(rounded, data, atol=1e-3):
-            data = rounded.astype(np.int16)
+    if data.dtype.kind == "f" and data.size:
+        data = _to_compact((data[..., z0:z0 + chunk] for z0 in range(0, data.shape[2], chunk)), data.shape)
     return data, affine
 
 

@@ -14,7 +14,8 @@ import json
 from radagent.agent.llm_client import ChatClient, LLMError, extract_json
 from radagent.agent.tools import TOOLS, CaseContext, ready_tools, requirements
 
-ORDER = ["load_study", "segment_liver_tumour", "measure_findings", "quality_check", "estimate_confidence",
+ORDER = ["load_study", "segment_liver_tumour", "measure_findings", "quality_check", "vlm_second_read",
+         "estimate_confidence",
          "triage_case", "apply_reader_policy", "draft_report", "finish"]
 
 
@@ -40,7 +41,8 @@ class RulePlanner:
             "segment_liver_tumour": "geometry known - segment liver and tumour",
             "measure_findings": "masks available - measure volumes from voxel spacing",
             "quality_check": "measurements available - check plausibility before trusting them",
-            "estimate_confidence": "calibrate the case-level tumour score",
+            "vlm_second_read": "measurements done - get an independent second read from the vision-language model",
+            "estimate_confidence": "combine segmenter and second read into one calibrated probability",
             "triage_case": "confidence and QC available - prioritise the case",
             "apply_reader_policy": "a reader is assigned - apply their learned suggestion/deferral policy",
             "draft_report": "fill the structured report with measured values",
@@ -50,7 +52,8 @@ class RulePlanner:
 
 SYSTEM_PROMPT = """You are the planning module of a research radiology agent that performs a first read of liver CT.
 You choose which tool to run next. You never describe images, never write findings and never invent values:
-tools compute everything and the report is a fixed template filled by a tool.
+tools compute everything, the report is a template filled by a tool, and the vision-language tool's own text
+is quoted there as unverified.
 Rules: run a tool only if all its required tools have completed; run each tool at most once;
 if quality control failed, the case must still be triaged (it will be marked for a manual read) and reported;
 call "finish" only after "draft_report".

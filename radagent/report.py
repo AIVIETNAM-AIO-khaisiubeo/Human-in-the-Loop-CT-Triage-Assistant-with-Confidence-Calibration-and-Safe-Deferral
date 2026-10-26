@@ -1,9 +1,11 @@
 """Deterministic, structured report draft.
 
-No language model writes clinical text here. Every sentence is a fixed template
-filled with measured values and model outputs, so the draft is reproducible,
-auditable and cannot hallucinate a finding. The radiologist's decision is a
-separate, clearly attributed section.
+Every finding in the draft is a fixed template filled with measured values and model
+outputs, so it is reproducible and auditable. The one exception is the clearly separated
+SECOND READ section: MedGemma's own words, quoted verbatim, labelled as unverified model
+text and checked by guardrails (sizes the measurement tool did not produce, a written
+conclusion that contradicts the model's own yes/no probability). The radiologist's
+decision is a separate, clearly attributed section.
 """
 from __future__ import annotations
 
@@ -27,6 +29,16 @@ def suggestion_text(p: float, threshold: float) -> str:
     return "Liver tumour suspected" if p >= threshold else "No liver tumour suspected"
 
 
+def _wrap(text: str, width: int = 96, indent: str = "    ") -> list[str]:
+    import textwrap
+
+    out = []
+    for para in (text or "").splitlines():
+        if para.strip():
+            out += textwrap.wrap(para.strip(), width=width, initial_indent=indent, subsequent_indent=indent)
+    return out
+
+
 def draft_report(record: dict, review: dict | None = None, policy: dict | None = None) -> str:
     g, m, c, q, t = (record.get(k, {}) for k in ("geometry", "measurements", "confidence", "quality", "triage"))
     model = record.get("model", {})
@@ -37,7 +49,9 @@ def draft_report(record: dict, review: dict | None = None, policy: dict | None =
           f"spacing {g.get('spacing_mm', ['?'] * 3)[2]:.2f} x {g.get('spacing_mm', ['?'] * 3)[1]:.2f} x "
           f"{g.get('spacing_mm', ['?'] * 3)[0]:.2f} mm (col x row x slice)") if g else "Geometry: -",
          f"AI tools: segmenter {model.get('backend', '-')} v{model.get('version', '-')} "
-         f"({model.get('passes', '-')} stochastic passes); confidence {c.get('calibrator', '-')}", ""]
+         f"({model.get('passes', '-')} stochastic passes); second reader "
+         f"{(record.get('vlm') or {}).get('model', {}).get('model_id', 'none')}",
+         f"Confidence: {c.get('calibrator', '-')}", ""]
 
     L.append("QUALITY CONTROL")
     if q:
@@ -62,7 +76,7 @@ def draft_report(record: dict, review: dict | None = None, policy: dict | None =
                 L.append(f"    ... {n - 8} smaller candidate(s) not listed")
     if c:
         L.append(f"  Case-level tumour probability (calibrated): {c['tumour_probability']:.2f}  "
-                 f"[raw score {c['tumour_probability_raw']:.2f}]")
+                 f"[segmenter raw score {c['tumour_probability_raw']:.2f}]")
         uc = c["uncertainty_components"]
         L.append(f"  Uncertainty: {c['uncertainty']:.2f} bits ({c['uncertainty_level']}); "
                  f"model disagreement across {len(c.get('pass_probabilities', []))} passes "
@@ -70,6 +84,25 @@ def draft_report(record: dict, review: dict | None = None, policy: dict | None =
     if t:
         rank = f", rank {t.get('rank')}/{t.get('of')}" if t.get("rank") else ""
         L.append(f"  Triage: {t['category']} (priority {t['priority']:.2f}{rank}).")
+    v = record.get("vlm") or {}
+    if v.get("status") == "ok":
+        L.append("")
+        L.append(f"SECOND READ - {v.get('model', {}).get('model_id', 'vision-language model')} "
+                 f"({v.get('n_images', '?')} axial slices)")
+        line = f"  P(tumour) answered by the model: {v['p_yes']:.2f}"
+        if c.get("vlm_probability") is not None:
+            line += f" (calibrated {c['vlm_probability']:.2f})"
+        if c.get("tools_disagree") is not None:
+            line += "; DISAGREES with the segmenter" if c["tools_disagree"] else "; agrees with the segmenter"
+        L.append(line + ".")
+        if v.get("text"):
+            L.append("  Model text (unverified, quoted verbatim, not used for measurements or triage):")
+            L += _wrap(v["text"][:1200] + (" [...]" if len(v["text"]) > 1200 else ""))
+        for note in (v.get("guard") or {}).get("notes", []):
+            L.append(f"  Guardrail: {note}.")
+    elif v.get("status") in ("unavailable", "error"):
+        L.append("")
+        L.append(f"SECOND READ - not available ({v.get('reason', v.get('status'))}).")
     L.append("")
     L.append("AI SUGGESTION")
     if policy and policy.get("decision") == "defer":

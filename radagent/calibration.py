@@ -1,26 +1,36 @@
 """Confidence calibration and its metrics.
 
-A score of 0.9 should mean "right about 90 % of the time" across comparable cases.
-Neural networks (and max-type scores like ``p_raw``) are usually over-confident, so
-the raw score is mapped to a probability on a *separate calibration split*:
+A score of 0.9 should mean "right about 90 % of the time" across comparable cases. Raw
+scores are usually over-confident, so they are mapped to a probability on a *separate
+calibration split*. Two scores exist per case:
 
-* **temperature scaling** - ``sigma(logit(p) / T)``; one parameter, keeps the ranking.
-* **Platt scaling** - ``sigma(a * logit(p) + b)``; also corrects a shift (useful when
-  negatives systematically get a non-trivial max-score).
-* ``auto`` chooses between identity / temperature / Platt by k-fold cross-validated
-  NLL *on the calibration split only* - the test split is never touched.
+* ``p_seg`` - the segmenter's case score (top tumour probabilities inside the liver);
+* ``p_vlm`` - MedGemma's P("yes") to "is there a liver tumour?" (may be missing).
 
-Metrics: Brier score, expected calibration error (equal-width and equal-mass bins),
-NLL, AUROC, reliability-diagram tables and bootstrap confidence intervals.
+Candidate maps (``z`` = logit):
+
+* ``identity``     the segmenter score as is
+* ``temperature``  ``sigma(z_seg / T)``
+* ``platt``        ``sigma(a z_seg + b)``
+* ``vlm``          ``sigma(va z_vlm + vb)``              (falls back to ``platt`` without a VLM read)
+* ``fused``        ``sigma(w0 + w1 z_seg + w2 z_vlm)``    (logistic fusion; same fallback)
+
+``auto`` picks the one with the lowest stratified k-fold cross-validated NLL *on the
+calibration split only* - the test split is never touched - so the data decide whether
+MedGemma adds anything over the segmenter.
+
+Metrics: Brier score, expected calibration error (equal-width and equal-mass bins), NLL,
+AUROC, reliability-diagram tables and bootstrap confidence intervals.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.optimize import minimize, minimize_scalar
 
 EPS = 1e-4
+METHODS = ("identity", "temperature", "platt", "vlm", "fused")
 
 
 def logit(p) -> np.ndarray:
@@ -38,38 +48,75 @@ def nll(p, y) -> float:
     return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
 
 
+def _as_vlm(p_vlm, n: int) -> np.ndarray:
+    if p_vlm is None:
+        return np.full(n, np.nan)
+    v = np.asarray(p_vlm, dtype=np.float64).reshape(-1)
+    return np.full(n, v[0]) if v.size == 1 and n > 1 else v
+
+
 @dataclass
 class Calibrator:
     method: str = "identity"
     T: float = 1.0
     a: float = 1.0
     b: float = 0.0
+    va: float = 1.0
+    vb: float = 0.0
+    w: list = field(default_factory=lambda: [0.0, 1.0, 1.0])
+    has_vlm: bool = False
     n_fit: int = 0
     note: str = ""
 
-    def __call__(self, p_raw):
+    # -- component maps
+    def seg_only(self, p_raw):
         z = logit(p_raw)
+        if self.method == "identity":
+            return np.clip(np.asarray(p_raw, dtype=np.float64), 0.0, 1.0)
         if self.method == "temperature":
             return sigmoid(z / self.T)
-        if self.method == "platt":
-            return sigmoid(self.a * z + self.b)
-        return np.clip(np.asarray(p_raw, dtype=np.float64), 0.0, 1.0)
+        return sigmoid(self.a * z + self.b)
+
+    def vlm_only(self, p_vlm):
+        v = np.asarray(p_vlm, dtype=np.float64)
+        return sigmoid(self.va * logit(v) + self.vb) if self.has_vlm else np.clip(v, 0.0, 1.0)
+
+    def __call__(self, p_raw, p_vlm=None):
+        scalar = np.ndim(p_raw) == 0
+        pr = np.atleast_1d(np.asarray(p_raw, dtype=np.float64))
+        pv = _as_vlm(p_vlm, len(pr))
+        out = self.seg_only(pr)
+        ok = np.isfinite(pv)
+        if self.method == "vlm" and ok.any():
+            out = np.where(ok, sigmoid(self.va * logit(np.where(ok, pv, 0.5)) + self.vb), out)
+        elif self.method == "fused" and ok.any():
+            z = self.w[0] + self.w[1] * logit(pr) + self.w[2] * logit(np.where(ok, pv, 0.5))
+            out = np.where(ok, sigmoid(z), out)
+        return float(out[0]) if scalar else out
 
     def describe(self) -> str:
         if self.method == "temperature":
             return f"temperature scaling (T = {self.T:.3f})"
         if self.method == "platt":
-            return f"Platt scaling (a = {self.a:.3f}, b = {self.b:.3f})"
+            return f"Platt scaling of the segmenter score (a = {self.a:.3f}, b = {self.b:.3f})"
+        if self.method == "vlm":
+            return f"Platt scaling of MedGemma's P(yes) (a = {self.va:.3f}, b = {self.vb:.3f})"
+        if self.method == "fused":
+            return (f"fused logistic calibration: segmenter x {self.w[1]:.2f} + MedGemma x {self.w[2]:.2f} "
+                    f"(bias {self.w[0]:.2f})")
         return "uncalibrated (identity)"
 
     def to_dict(self) -> dict:
-        return {"method": self.method, "T": self.T, "a": self.a, "b": self.b, "n_fit": self.n_fit, "note": self.note,
+        return {"method": self.method, "T": self.T, "a": self.a, "b": self.b, "va": self.va, "vb": self.vb,
+                "w": list(self.w), "has_vlm": self.has_vlm, "n_fit": self.n_fit, "note": self.note,
                 "description": self.describe()}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Calibrator":
         return cls(method=d.get("method", "identity"), T=float(d.get("T", 1.0)), a=float(d.get("a", 1.0)),
-                   b=float(d.get("b", 0.0)), n_fit=int(d.get("n_fit", 0)), note=d.get("note", ""))
+                   b=float(d.get("b", 0.0)), va=float(d.get("va", 1.0)), vb=float(d.get("vb", 0.0)),
+                   w=[float(x) for x in d.get("w", [0.0, 1.0, 1.0])], has_vlm=bool(d.get("has_vlm", False)),
+                   n_fit=int(d.get("n_fit", 0)), note=d.get("note", ""))
 
 
 def fit_temperature(p_raw, y) -> float:
@@ -88,44 +135,83 @@ def fit_platt(p_raw, y, l2: float = 1e-3) -> tuple[float, float]:
     return float(res.x[0]), float(res.x[1])
 
 
-def _fit(method: str, p, y) -> Calibrator:
+def fit_fused(p_seg, p_vlm, y, l2: float = 1e-2) -> list:
+    """Logistic regression on (logit p_seg, logit p_vlm) with a weak ridge towards (0, 1, 1)."""
+    z1, z2, y = logit(p_seg), logit(p_vlm), np.asarray(y, dtype=np.float64)
+
+    def obj(w):
+        return nll(sigmoid(w[0] + w[1] * z1 + w[2] * z2), y) + l2 * (w[0] ** 2 + (w[1] - 1) ** 2 + (w[2] - 1) ** 2)
+
+    res = minimize(obj, x0=np.array([0.0, 1.0, 1.0]), method="L-BFGS-B",
+                   bounds=[(-50.0, 50.0), (-20.0, 20.0), (-20.0, 20.0)])
+    return [float(x) for x in res.x]
+
+
+def _fit(method: str, p, v, y) -> Calibrator:
+    n = len(y)
+    if method == "identity":
+        return Calibrator("identity", n_fit=n)
     if method == "temperature":
-        return Calibrator("temperature", T=fit_temperature(p, y), n_fit=len(y))
-    if method == "platt":
-        a, b = fit_platt(p, y)
-        return Calibrator("platt", a=a, b=b, n_fit=len(y))
-    return Calibrator("identity", n_fit=len(y))
+        return Calibrator("temperature", T=fit_temperature(p, y), n_fit=n)
+    a, b = fit_platt(p, y)
+    cal = Calibrator("platt", a=a, b=b, n_fit=n)
+    ok = np.isfinite(v)
+    if ok.sum() >= 4 and np.unique(y[ok]).size == 2:
+        cal.va, cal.vb = fit_platt(v[ok], y[ok])
+        cal.has_vlm = True
+        if method == "vlm":
+            cal.method = "vlm"
+        elif method == "fused":
+            cal.method, cal.w = "fused", fit_fused(p[ok], v[ok], y[ok])
+    return cal
 
 
-def fit_calibrator(p_raw, y, method: str = "auto", n_folds: int = 5, seed: int = 0) -> tuple[Calibrator, dict]:
+def _stratified_folds(y: np.ndarray, k: int, seed: int) -> list[np.ndarray]:
+    rng = np.random.default_rng(seed)
+    folds = [[] for _ in range(k)]
+    for cls in np.unique(y):
+        idx = rng.permutation(np.where(y == cls)[0])
+        for j, i in enumerate(idx):
+            folds[j % k].append(int(i))
+    return [np.array(sorted(f)) for f in folds if f]
+
+
+def fit_calibrator(p_raw, y, method: str = "auto", n_folds: int = 5, seed: int = 0,
+                   p_vlm=None) -> tuple[Calibrator, dict]:
     p_raw, y = np.asarray(p_raw, dtype=np.float64), np.asarray(y, dtype=np.int64)
-    info: dict = {"n": int(len(y)), "n_pos": int(y.sum()), "n_neg": int(len(y) - y.sum())}
+    v = _as_vlm(p_vlm, len(y))
+    has_vlm = int(np.isfinite(v).sum())
+    info: dict = {"n": int(len(y)), "n_pos": int(y.sum()), "n_neg": int(len(y) - y.sum()), "n_with_vlm": has_vlm}
     if len(y) < 4 or y.min() == y.max():
         cal = Calibrator("identity", n_fit=len(y), note="calibration split has a single class - left uncalibrated")
         info["selected"] = "identity"
         info["warning"] = cal.note
         return cal, info
     if method != "auto":
-        cal = _fit(method, p_raw, y)
-        info["selected"] = method
+        cal = _fit(method, p_raw, v, y)
+        info["selected"] = cal.method
         return cal, info
-    rng = np.random.default_rng(seed)
-    idx = rng.permutation(len(y))
-    folds = np.array_split(idx, min(n_folds, len(y)))
-    cv = {m: [] for m in ("identity", "temperature", "platt")}
+    candidates = ["identity", "temperature", "platt"]
+    if has_vlm >= 4:
+        candidates += ["vlm", "fused"]
+    k = int(min(n_folds, max(2, min(int(y.sum()), int(len(y) - y.sum())))))
+    folds = _stratified_folds(y, k, seed)
+    cv = {m: 0.0 for m in candidates}
+    used = 0
     for f in folds:
-        tr = np.setdiff1d(idx, f)
+        tr = np.setdiff1d(np.arange(len(y)), f)
         if y[tr].min() == y[tr].max():
             continue
-        for m in cv:
-            cal = _fit(m, p_raw[tr], y[tr])
-            cv[m].append(nll(cal(p_raw[f]), y[f]) * len(f))
-    scores = {m: float(np.sum(v) / len(y)) for m, v in cv.items() if v}
+        used += len(f)
+        for m in candidates:
+            cal = _fit(m, p_raw[tr], v[tr], y[tr])
+            cv[m] += nll(cal(p_raw[f], v[f]), y[f]) * len(f)
+    scores = {m: cv[m] / max(1, used) for m in candidates}
     best = min(scores, key=scores.get)
     info["cv_nll"] = {m: round(s, 4) for m, s in scores.items()}
-    info["selected"] = best
-    cal = _fit(best, p_raw, y)
-    cal.note = f"selected by {len(folds)}-fold CV NLL on the calibration split"
+    cal = _fit(best, p_raw, v, y)
+    info["selected"] = cal.method
+    cal.note = f"selected by {len(folds)}-fold stratified CV NLL on the calibration split"
     return cal, info
 
 
@@ -192,6 +278,7 @@ def calibration_report(p, y, n_bins: int = 10, n_boot: int = 1000, seed: int = 0
            "ece_adaptive": ece(p, y, n_bins, "quantile"), "nll": nll(p, y), "auroc": auroc(p, y)}
     out["brier_ci"] = bootstrap_ci(brier, p, y, n_boot, seed)
     out["ece_ci"] = bootstrap_ci(lambda a, b: ece(a, b, n_bins), p, y, n_boot, seed)
+    out["auroc_ci"] = bootstrap_ci(auroc, p, y, n_boot, seed) if 0 < y.sum() < len(y) else (float("nan"),) * 2
     return out
 
 

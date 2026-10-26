@@ -1,10 +1,9 @@
-"""Unit tests for geometry, calibration, policies, readers, agent guardrails and the report.
+"""Unit tests for geometry, calibration, policies, readers, triage, agent guardrails and the report.
 
 Run:  pytest -q
 """
 from __future__ import annotations
 
-import json
 import math
 import sys
 from pathlib import Path
@@ -142,7 +141,7 @@ def test_policy_decide_and_qc():
 
 
 def test_fit_policy_personalises_only_with_evidence():
-    cfg = load_config(ROOT / "configs" / "demo.yaml")
+    cfg = load_config(ROOT / "configs" / "lits.yaml")
     cases = _cases()
     prof = load_profiles(cfg)["reader_a"]
     events = []
@@ -161,7 +160,7 @@ def test_fit_policy_personalises_only_with_evidence():
 
 
 def test_expected_loss_defer_everything_equals_reader_alone():
-    cfg = load_config(ROOT / "configs" / "demo.yaml")
+    cfg = load_config(ROOT / "configs" / "lits.yaml")
     cases = _cases()
     from radagent.policy import _arrays
 
@@ -173,7 +172,7 @@ def test_expected_loss_defer_everything_equals_reader_alone():
 
 
 def test_simulated_reader_behaviour():
-    cfg = load_config(ROOT / "configs" / "demo.yaml")
+    cfg = load_config(ROOT / "configs" / "lits.yaml")
     prof = load_profiles(cfg)
     case = {"case_id": "x", "gt_present": False, "gt_tumour_ml": 0.0, "poor_outline": False}
     wrong_ai = {"decision": "show", "ai_label": 1, "confidence": 0.95}
@@ -184,23 +183,30 @@ def test_simulated_reader_behaviour():
 
 # --------------------------------------------------------------------------- triage, report, agent
 def _record():
-    return {"case_id": "syn_001", "split": "test", "source": "synthetic",
-            "geometry": {"shape_on_disk": [144, 144, 50], "spacing_mm": [4.0, 2.5, 2.5], "orientation_on_disk": ["L", "P", "S"]},
-            "model": {"backend": "voxel_gbm", "version": "1.0", "passes": 3},
+    return {"case_id": "lits_028", "split": "test", "source": "LiTS17",
+            "geometry": {"shape_on_disk": [512, 512, 120], "spacing_mm": [2.5, 0.78, 0.78], "orientation_on_disk": ["L", "P", "S"]},
+            "model": {"backend": "vitunetr", "version": "2.5D", "passes": 3},
             "measurements": {"liver_found": True, "liver_volume_ml": 1500.0, "liver_mean_hu": 60.0,
                              "predicted_tumour_volume_ml": 6.2, "tumour_burden_pct": 0.41, "n_lesions": 1,
-                             "largest_lesion_diameter_mm": 24.0,
-                             "lesions": [{"id": 1, "volume_ml": 6.2, "max_axial_diameter_mm": 24.0, "slice_range": [10, 14],
-                                          "key_slice": 12, "mean_hu": 30.0, "mean_probability": 0.8}]},
+                             "largest_lesion_diameter_mm": 24.0, "liver_slice_range": [30, 90],
+                             "lesions": [{"id": 1, "volume_ml": 6.2, "max_axial_diameter_mm": 24.0, "slice_range": [60, 68],
+                                          "key_slice": 64, "mean_hu": 30.0, "mean_probability": 0.8}]},
+            "vlm": {"status": "ok", "source": "cache", "p_yes": 0.83,
+                    "model": {"backend": "medgemma", "model_id": "google/medgemma-1.5-4b-it", "precision": "bf16"},
+                    "text": "A hypodense lesion in the right lobe, about 4 cm. Final Answer: yes",
+                    "guard": {"final_answer": 1, "unverified_sizes": ["4 cm"],
+                              "notes": ["mentions sizes that the measurement tool did not produce: 4 cm"]}},
             "confidence": {"tumour_probability": 0.9, "tumour_probability_raw": 0.95, "uncertainty": 0.47,
-                           "uncertainty_level": "medium", "calibrator": "temperature scaling (T = 1.5)",
+                           "uncertainty_level": "medium", "calibrator": "fused logistic calibration",
+                           "segmenter_probability": 0.88, "vlm_probability_raw": 0.83, "vlm_probability": 0.8,
+                           "tools_disagree": False,
                            "uncertainty_components": {"predictive_entropy": 0.47, "expected_entropy": 0.4,
                                                       "mutual_information": 0.07}, "pass_probabilities": [0.88, 0.9, 0.92]},
             "quality": {"passed": True, "failed_reasons": []}}
 
 
 def test_triage_and_report_are_deterministic():
-    cfg = load_config(ROOT / "configs" / "demo.yaml")
+    cfg = load_config(ROOT / "configs" / "lits.yaml")
     rec = _record()
     t = triage(rec["confidence"], rec["measurements"], rec["quality"], cfg)
     assert t["category"] == "URGENT"
@@ -208,6 +214,7 @@ def test_triage_and_report_are_deterministic():
     rank_worklist([rec])
     a, b = draft_report(rec), draft_report(rec)
     assert a == b and "RESEARCH PREDICTION" in a and "6.2 ml" in a and "Pending" in a
+    assert "medgemma-1.5-4b-it" in a and "4 cm" in a and "unverified" in a.lower()
     rv = draft_report(rec, review={"reader_id": "live", "action": "reject", "final_label": 0, "initial_read": 0,
                                    "timestamp": "2026-10-25T10:00:00"})
     assert "rejected the AI suggestion" in rv and "no liver tumour" in rv
@@ -233,15 +240,15 @@ def test_agent_guardrails_reject_out_of_order_tools():
     assert validate({"tool": "load_study", "args": {}}, ctx) is not None
 
 
-def test_synthetic_phantom_labels():
-    from radagent.data.synthetic import make_phantom
-
-    ph = make_phantom(np.random.default_rng([7, 3]), size=96)
-    lab = ph["label"]
-    assert set(np.unique(lab)) <= {0, 1, 2}
-    liver_ml = (lab > 0).sum() * np.prod(ph["spacing"]) / 1000
-    assert 700 < liver_ml < 4000
-    assert json.dumps(ph["meta"])
+def test_triage_disagreement_never_likely_normal():
+    cfg = load_config(ROOT / "configs" / "lits.yaml")
+    rec = _record()
+    calm = {**rec["confidence"], "tumour_probability": 0.1, "uncertainty": 0.2, "tools_disagree": False}
+    meas0 = {**rec["measurements"], "predicted_tumour_volume_ml": 0.0, "largest_lesion_diameter_mm": 0.0}
+    t0 = triage(calm, meas0, rec["quality"], cfg)
+    t1 = triage({**calm, "tools_disagree": True}, meas0, rec["quality"], cfg)
+    assert t0["category"] == "LIKELY NORMAL" and t1["category"] == "UNCERTAIN"
+    assert t1["priority"] > t0["priority"]
 
 
 def test_llm_planner_guardrails_with_scripted_model():
@@ -275,7 +282,7 @@ def test_llm_planner_guardrails_with_scripted_model():
             TOOLS[k].fn = fn
     tools = [s["tool"] for s in trace["steps"]]
     assert trace["status"] == "complete"
-    assert tools == ["load_study", "segment_liver_tumour", "measure_findings", "quality_check", "estimate_confidence",
-                     "triage_case", "draft_report", "finish"]
+    assert tools == ["load_study", "segment_liver_tumour", "measure_findings", "quality_check", "vlm_second_read",
+                     "estimate_confidence", "triage_case", "draft_report", "finish"]
     assert trace["n_guardrail_overrides"] >= 3
     assert trace["steps"][0]["planned_by"] == "llm" and trace["steps"][1]["guardrail"]

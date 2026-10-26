@@ -1,3 +1,3 @@
-# Deep segmentation backends (ViT-UNETR 2.5D, 2.5D U-Net). Colab already ships torch.
+# Segmentation tool (ViT-UNETR 2.5D; 2.5D U-Net alternative). Colab already ships torch.
 torch>=2.1
 timm>=0.9.16
