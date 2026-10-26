@@ -36,6 +36,7 @@ class FeedbackEvent:
     recommendation: dict | None = None  # label text, probability, threshold, uncertainty, tool agreement
     impression_at: str | None = None
     revealed_at: str | None = None
+    supersedes: str | None = None      # timestamp of the decision this one revises (never overwritten)
 
     def to_dict(self) -> dict:
         return asdict(self)

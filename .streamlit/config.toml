@@ -2,7 +2,7 @@
 # Deep navy text, soft-teal actions on a white page; every text/background pair meets WCAG AA.
 [theme]
 base = "light"
-primaryColor = "#0F766E"
+primaryColor = "#163A66"
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F3F7F9"
 textColor = "#16324F"

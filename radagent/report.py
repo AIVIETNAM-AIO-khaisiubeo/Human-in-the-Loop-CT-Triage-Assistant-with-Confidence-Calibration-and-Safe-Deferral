@@ -138,8 +138,13 @@ def draft_report(record: dict, review: dict | None = None, policy: dict | None =
             if e.get("kept_lesions") is not None:
                 L.append(f"  Lesions retained after edit: {e['kept_lesions'] or 'none'}; "
                          f"edited tumour volume {_fmt_ml(float(e.get('edited_volume_ml', 0.0)))}.")
+            if e.get("defer_reason"):
+                L.append(f"  Reason for deferral: {e['defer_reason']}.")
             if e.get("note"):
                 L.append(f"  Note: {e['note']}")
+        if review.get("supersedes"):
+            L.append(f"  This decision revises the one saved at {review['supersedes']} (both are kept in the log).")
+        L.append("  Status: research decision saved; this report draft is not signed.")
     L.append("")
     L.append("All values above are automatic research measurements from a public, de-identified dataset;")
     L.append("they have not been validated for clinical use. The radiologist is responsible for every finding.")

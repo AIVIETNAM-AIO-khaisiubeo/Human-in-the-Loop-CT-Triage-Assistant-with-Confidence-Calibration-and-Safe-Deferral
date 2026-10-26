@@ -1,46 +1,52 @@
-"""Visual design of the reading interface: semantic colour tokens, CSS and small HTML components.
+"""Visual design of the reading interface: tokens, CSS and small HTML components.
 
-Design rationale, the radiologist journey and the design-review response: ``docs/UX_DESIGN.md``.
+Design rationale, the radiologist journey and the responses to the design reviews: ``docs/UX_DESIGN.md``.
 Everything here is plain Python returning strings (no Streamlit import), so it can be unit-tested.
 All dynamic text is HTML-escaped.
 
-Colour has one meaning each (never decoration):
-navy = application structure · teal = active controls and primary actions (never "the AI is right") ·
-red = a validated critical rule (urgent) · amber = caution / review needed · slate = neutral and technical.
+Four status concepts are kept visually and verbally separate:
+technical validity (QC, amber square) · clinical urgency by the AI rule (red triangle, rare) ·
+workflow status (neutral text) · AI evidence characteristics such as disagreement (amber, labelled).
+Colour roles: navy = structure and selection · teal = primary actions only · red = the validated urgent
+rule only · amber = caution / review needed · slate = neutral and technical. No green.
 """
 from __future__ import annotations
 
 import html
 import math
 
-# --------------------------------------------------------------------------- semantic tokens
-NAVY = "#102D52"       # structure: header, navigation, headings
+# --------------------------------------------------------------------------- tokens
+NAVY = "#102D52"
 NAVY_2 = "#163A66"
-INK = "#1B2B40"        # body text
-SLATE = "#526579"      # neutral / technical / secondary text
-TEAL = "#0F766E"       # active controls and primary actions only
+INK = "#1B2B40"
+SLATE = "#526579"
+TEAL = "#0F766E"
 TEAL_DARK = "#0B5F59"
 TEAL_TINT = "#E3F3F1"
-TEAL_SOFT = "#8FD3CB"  # accent on navy
-RED = "#B42318"        # validated critical rule (urgent)
+TEAL_SOFT = "#8FD3CB"
+RED = "#B42318"
 RED_BG = "#FEF3F2"
-AMBER = "#B54708"      # caution, review needed, QC issue, disagreement
+AMBER = "#B54708"
 AMBER_BG = "#FFF6E5"
+AMBER_INK = "#7A2E0E"
 SLATE_BG = "#F1F4F7"
-SURFACE = "#F5F7FA"
+SELECT_BG = "#EEF3F9"
+HOVER_BG = "#F8FAFB"
+SURFACE = "#F7F8FA"
 BORDER = "#D6DEE6"
 BORDER_STRONG = "#8A9BAD"
 VIEWER_BG = "#0A1628"
-# legacy aliases used elsewhere in the app
+VIEWER_INK = "#D7E1EC"
 MUTED = SLATE
 
-# viewer overlays (RGB): mutually distinguishable and visible on grey CT (checked in tests/test_app.py)
+SPACE = {"xs": 4, "s": 8, "m": 12, "l": 16, "xl": 24, "xxl": 32}   # 8-px system
+
 OVERLAY = {
-    "liver": (64, 201, 186),      # teal outline
-    "lesion": (255, 170, 51),     # amber outline + adjustable fill
+    "liver": (64, 201, 186),       # teal contour
+    "lesion": (255, 170, 51),      # amber contour (+ optional fill, off by default)
     "selected": (255, 230, 120),
     "reference": (245, 247, 250),
-    "uncertainty": (199, 125, 255),  # violet, adjustable opacity
+    "uncertainty": (199, 125, 255),  # violet, opacity = voxel uncertainty
 }
 
 _ICONS = {
@@ -60,28 +66,30 @@ _ICONS = {
             '<rect x="7.1" y="3.8" width="1.8" height="1.8" fill="#fff"/>',
     "lock": '<rect x="2.5" y="7" width="11" height="8" rx="1.6"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" '
             'stroke="currentColor" stroke-width="1.8"/>',
-    "dot": '<circle cx="8" cy="8" r="3.4"/>',
+    "dot": '<circle cx="8" cy="8" r="3.2"/>',
     "clock": '<circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.8"/>'
              '<path d="M7.2 4h1.6v4.2l2.6 1.6-.8 1.3-3.4-2z"/>',
+    "pen": '<path d="M11.6 1.6 14.4 4.4 5.2 13.6 1.6 14.4 2.4 10.8z"/>',
 }
 
-# AI category (an AI output, never a diagnosis) -> (css modifier, label, icon)
+# AI category (an AI output, never a diagnosis): (css modifier, label, icon)
 CATEGORY_STYLE = {
-    "URGENT": ("urgent", "Urgent (rule)", "triangle"),
+    "URGENT": ("urgent", "Urgent by AI rule", "triangle"),
     "SUSPICIOUS": ("caution", "AI: tumour suspected", "diamond"),
-    "UNCERTAIN": ("caution-outline", "AI: uncertain", "half"),
+    "UNCERTAIN": ("caution", "AI: uncertain", "half"),
     "LIKELY NORMAL": ("neutral", "AI: no tumour suspected", "ring"),
-    "DEFERRED": ("neutral-outline", "AI withheld (policy)", "person"),
-    "QC FAIL": ("neutral-outline", "AI withheld (QC)", "square"),
+    "DEFERRED": ("neutral", "AI withheld (policy)", "person"),
+    "QC FAIL": ("neutral", "AI withheld (QC)", "square"),
 }
 
+# workflow status: (css modifier, label, icon)
 STATUS_STYLE = {
-    "pending": ("unread", "Unread", "dot"),
-    "impression": ("progress", "Impression recorded", "clock"),
-    "accept": ("done", "Decided · agreed with AI", "check"),
-    "edit": ("done", "Decided · AI lesions modified", "check"),
-    "reject": ("done", "Decided · differs from AI", "check"),
-    "manual": ("done", "Decided · independent read", "check"),
+    "pending": ("neutral", "Unread", "dot"),
+    "impression": ("navy", "Impression saved", "pen"),
+    "accept": ("navy", "Decided · agrees with AI", "check"),
+    "edit": ("navy", "Decided · AI lesions modified", "check"),
+    "reject": ("navy", "Decided · differs from AI", "check"),
+    "manual": ("navy", "Decided · independent read", "check"),
     "defer": ("caution", "Deferred · second opinion", "clock"),
 }
 
@@ -100,74 +108,68 @@ def pct(p) -> str:
     return "-" if p is None or (isinstance(p, float) and math.isnan(p)) else f"{100 * float(p):.0f}%"
 
 
-# --------------------------------------------------------------------------- components
+# --------------------------------------------------------------------------- text-level components
 def badge(category: str) -> str:
     mod, label, ico = CATEGORY_STYLE.get(category, ("neutral", category.title(), "dot"))
-    return f'<span class="ra-badge ra-b-{mod}">{icon(ico, 14)}<span>{esc(label)}</span></span>'
+    return f'<span class="ra-tag ra-t-{mod}">{icon(ico, 14)}<span>{esc(label)}</span></span>'
 
 
 def status_badge(status: str) -> str:
-    mod, label, ico = STATUS_STYLE.get(status, ("unread", status, "dot"))
-    return f'<span class="ra-status ra-s-{mod}">{icon(ico, 14)}<span>{esc(label)}</span></span>'
+    mod, label, ico = STATUS_STYLE.get(status, ("neutral", status, "dot"))
+    return f'<span class="ra-tag ra-t-{mod}">{icon(ico, 14)}<span>{esc(label)}</span></span>'
 
 
 def qc_badge(kind: str, label: str, detail: str = "") -> str:
     t = f' title="{esc(detail)}"' if detail else ""
     if kind == "ok":
-        return f'<span class="ra-qc ra-qc-ok"{t}>{icon("check", 14)}<span>{esc(label)}</span></span>'
-    return f'<span class="ra-qc ra-qc-fail"{t}>{icon("square", 14)}<span>{esc(label)}</span></span>'
+        return f'<span class="ra-tag ra-t-neutral"{t}>{icon("check", 14)}<span>{esc(label)}</span></span>'
+    return f'<span class="ra-tag ra-t-technical"{t}>{icon("square", 14)}<span>{esc(label)}</span></span>'
 
 
 def hidden_finding() -> str:
-    return (f'<span class="ra-hidden">{icon("lock", 14)}<span>Hidden until your impression</span></span>')
+    return f'<span class="ra-tag ra-t-neutral">{icon("lock", 14)}<span>AI findings hidden</span></span>'
 
 
-def chip(text: str, kind: str = "plain", title: str | None = None) -> str:
-    t = f' title="{esc(title)}"' if title else ""
-    return f'<span class="ra-chip ra-chip-{kind}"{t}>{text}</span>'
+def top_identity() -> str:
+    return ('<div class="ra-id"><span class="ra-prod">ReaderAdapt</span><span class="ra-prod-sub">Liver CT</span>'
+            f'<span class="ra-research">{icon("info", 13)}Research prototype · not for clinical use</span></div>')
 
 
-def header(reader_name: str | None, session_id: str | None, model_id: str | None, mode_label: str | None) -> str:
-    """Slim navy session bar: identity of the app, the reader, the session and the model set."""
-    logo = ('<svg class="ra-logo" viewBox="0 0 40 40" aria-hidden="true" focusable="false">'
-            '<rect width="40" height="40" rx="9" fill="#163A66"/>'
-            '<path d="M9 21c0-6.6 5.6-11 12.6-11 5.4 0 9.4 2.6 9.4 7.4 0 6.4-6.4 12.6-13.8 12.6C12.4 30 9 26.4 9 21z"'
-            ' fill="none" stroke="#8FD3CB" stroke-width="2.4"/><circle cx="23.5" cy="18.5" r="3.2" fill="#8FD3CB"/></svg>')
-    meta = []
-    if reader_name:
-        meta.append(chip(f"Reader <b>{esc(reader_name)}</b>", "meta"))
-    if mode_label:
-        meta.append(chip(esc(mode_label), "meta"))
-    if session_id:
-        meta.append(chip(f"Session {esc(session_id)}", "meta", "Reading-session identifier (recorded with every decision)"))
-    if model_id:
-        meta.append(chip(f"Model set {esc(model_id)}", "meta", "Segmentation model, second-reader model and "
-                                                                "calibration used in this session"))
-    return f"""
-<header class="ra-top" aria-label="Session">
-  <div class="ra-brand">{logo}<span class="ra-title">ReaderAdapt · Liver CT</span>
-    {chip(icon('info', 13) + ' Research prototype · not for clinical use', 'research')}</div>
-  <div class="ra-top-meta">{''.join(meta)}</div>
-</header>"""
+def top_state(reader: str, mode: str | None, session_short: str, locked: bool) -> str:
+    parts = [f"Reader: <b>{esc(reader)}</b>"]
+    if mode:
+        parts.append(esc(mode))
+    parts.append(f"Session {esc(session_short)}" + (f" {icon('lock', 12, 'settings locked')}" if locked else ""))
+    return f'<div class="ra-state">{" · ".join(parts)}</div>'
 
 
-def status_line(items: list[tuple[str, str, str]], note_html: str = "") -> str:
-    """Slim queue summary: (label, value, modifier) separated by middots."""
-    parts = "".join(f'<span class="ra-sl ra-sl-{esc(m)}"><span class="ra-sl-l">{esc(lbl)}</span> '
-                    f'<b>{esc(v)}</b></span>' for lbl, v, m in items)
-    return f'<div class="ra-statusline" role="status">{parts}{note_html}</div>'
+def summary_line(groups: list[tuple[str, list[tuple[str, str]]]]) -> str:
+    """Grouped queue summary; each group is one concept: workflow / technical / urgency / evidence."""
+    ico = {"workflow": "", "technical": icon("square", 13), "urgency": icon("triangle", 13),
+           "evidence": icon("alert", 13)}
+    out = []
+    for kind, items in groups:
+        txt = " · ".join(f"<b>{esc(v)}</b> {esc(lbl)}" for lbl, v in items)
+        out.append(f'<span class="ra-sum ra-sum-{esc(kind)}">{ico.get(kind, "")}{txt}</span>')
+    return f'<div class="ra-summary" role="status">{"".join(out)}</div>'
 
 
-def stepper(current: int, done: set[int]) -> str:
-    names = ["Independent read", "Reveal AI evidence", "Reconcile and decide"]
+def progress(current: int, done: set[int], labels=("Independent read", "AI evidence", "Decision")) -> str:
     items = []
-    for i, n in enumerate(names, start=1):
+    for i, n in enumerate(labels, start=1):
         state = "done" if i in done else ("current" if i == current else "todo")
-        mark = icon("check", 12) if state == "done" else str(i)
+        mark = icon("check", 11) if state == "done" else str(i)
         cur = ' aria-current="step"' if state == "current" else ""
-        items.append(f'<li class="ra-step ra-step-{state}"{cur}><span class="ra-step-n">{mark}</span>'
-                     f'<span class="ra-step-t">{esc(n)}</span></li>')
-    return f'<ol class="ra-steps" aria-label="Reading steps">{"".join(items)}</ol>'
+        items.append(f'<li class="ra-pg ra-pg-{state}"{cur}><span class="ra-pg-n">{mark}</span>{esc(n)}</li>')
+    return f'<ol class="ra-progress" aria-label="Reading progress">{"".join(items)}</ol>'
+
+
+stepper = progress
+
+
+def case_identity(case_id: str, status: str, meta: str) -> str:
+    return (f'<div class="ra-caseid"><span class="ra-case">{esc(case_id)}</span>{status_badge(status)}</div>'
+            f'<div class="ra-meta">{esc(meta)}</div>')
 
 
 def meter(p: float, threshold: float | None = None, label: str = "Tumour probability") -> str:
@@ -182,61 +184,68 @@ def meter(p: float, threshold: float | None = None, label: str = "Tumour probabi
             f'<div class="ra-meter-fill" style="width:{pc:.1f}%"></div>{thr}</div>')
 
 
-def comparison(impression: int | None, impression_time: str | None, ai_label: int | None,
-               ai_text: str) -> str:
-    """Your independent impression and the AI suggestion side by side, after the reveal."""
+def comparison(impression: int | None, impression_time: str | None, ai_label: int | None, ai_text: str) -> str:
+    """Your impression and the AI suggestion as information - not a control."""
     if impression is None:
         mine = '<span class="ra-muted">Not recorded</span>'
     else:
-        mine = f"<b>{'Tumour present' if impression else 'No liver tumour'}</b>"
+        mine = f"{'Tumour present' if impression else 'No liver tumour'}"
         if impression_time:
-            mine += f' <span class="ra-muted">· {esc(impression_time)}</span>'
+            mine += f' <span class="ra-muted">· saved {esc(impression_time)}</span>'
     rel = ""
     if impression is not None and ai_label is not None:
-        rel = ('<span class="ra-rel ra-rel-same">Same as your impression</span>' if impression == ai_label
-               else '<span class="ra-rel ra-rel-diff">Differs from your impression</span>')
-    return (f'<div class="ra-compare"><div><div class="ra-k">Your impression</div>{mine}</div>'
-            f'<div><div class="ra-k">AI suggestion</div><b>{esc(ai_text)}</b></div>{rel}</div>')
+        rel = ('<div class="ra-rel">Same binary finding (tumour present / absent).</div>' if impression == ai_label
+               else '<div class="ra-rel ra-rel-diff">Different binary finding from your impression.</div>')
+    return (f'<div class="ra-cmp"><div><div class="ra-k">Your impression</div><div class="ra-v">{mine}</div></div>'
+            f'<div><div class="ra-k">AI suggestion</div><div class="ra-v">{esc(ai_text)}</div></div></div>{rel}')
 
 
-def ai_summary(*, headline: str, positive: bool, p: float, threshold: float, unc_phrase: str,
-               unc_definition: str, unc_level: str, agreement_kind: str, agreement_text: str,
-               qc_ok: bool, reasons: list[str]) -> str:
-    agree_cls = {"disagree": "ra-ag-caution", "differ": "ra-ag-caution", "agree": "ra-ag-neutral"}.get(
-        agreement_kind, "ra-ag-neutral")
-    agree_ico = "alert" if agreement_kind in ("disagree", "differ") else "info"
-    why = "".join(f"<li>{esc(r)}</li>" for r in reasons if r)
+def evidence(*, finding: str, p: float, threshold: float, target: str, unc_level: str, unc_text: str,
+             qc_ok: bool, agreement_kind: str, agreement_text: str, agreement_interp: str) -> str:
+    """AI evidence in reading order: finding -> probability and target -> uncertainty and validity -> agreement."""
+    unc_cls = "ra-dd-caution" if unc_level == "high" else ""
+    ag_cls = "ra-dd-caution" if agreement_kind in ("disagree", "differ") else ""
+    ag_ico = icon("alert", 13) if agreement_kind in ("disagree", "differ") else ""
     return f"""
-<section class="ra-ai" aria-label="AI summary">
-  <div class="ra-ai-head">{esc(headline)}</div>
-  <div class="ra-ai-target">Patient-level probability that this CT shows at least one liver tumour (calibrated):
-    <b>{pct(p)}</b> <span class="ra-muted">· suggestion threshold {pct(threshold)}</span></div>
+<section class="ra-ev" aria-label="AI evidence">
+  <div class="ra-ev-find">{esc(finding)}</div>
+  <div class="ra-ev-p"><span class="ra-ev-num">{pct(p)}</span><span class="ra-ev-target">{esc(target)}</span></div>
   {meter(p, threshold, "Patient-level tumour probability")}
-  <div class="ra-ai-unc ra-unc-{esc(unc_level)}" title="{esc(unc_definition)}">{esc(unc_phrase)}
-    <span class="ra-muted">· 0 = certain, 1 = a 50/50 call; high ≥ 0.85</span></div>
-  <div class="ra-ag {agree_cls}">{icon(agree_ico, 15)}<span>{esc(agreement_text)}</span></div>
-  <div class="ra-valid">{icon('check' if qc_ok else 'alert', 14)}
-    {'AI output valid: automatic quality checks passed.' if qc_ok else 'AI output not valid: quality checks failed.'}</div>
-  {f'<details class="ra-why"><summary>Why this case is ranked here</summary><ul>{why}</ul></details>' if why else ''}
+  <dl class="ra-dl">
+    <div><dt>Uncertainty</dt><dd class="{unc_cls}">{esc(unc_text)}</dd></div>
+    <div><dt>Validity</dt><dd>{'Automatic quality checks passed.' if qc_ok else 'Quality checks failed - output withheld.'}</dd></div>
+    <div><dt>Model agreement</dt><dd class="{ag_cls}">{ag_ico}{esc(agreement_text)}
+      <span class="ra-interp">{esc(agreement_interp)}</span></dd></div>
+  </dl>
 </section>"""
 
 
-def withheld_card(title: str, body_html: str) -> str:
-    return (f'<section class="ra-ai ra-ai-withheld" aria-label="AI suggestion withheld">'
-            f'<div class="ra-ai-head">{esc(title)}</div><div class="ra-ai-body">{body_html}</div></section>')
+def withheld(title: str, rows: list[tuple[str, str]]) -> str:
+    dl = "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in rows)
+    return (f'<section class="ra-ev ra-ev-withheld" aria-label="AI output withheld">'
+            f'<div class="ra-ev-find">{icon("square", 15)} {esc(title)}</div><dl class="ra-dl">{dl}</dl></section>')
+
+
+def save_state(kind: str, text: str) -> str:
+    """kind: none | unsaved | saved | failed"""
+    ico = {"none": "dot", "unsaved": "pen", "saved": "check", "failed": "alert"}[kind]
+    return f'<span class="ra-save ra-save-{esc(kind)}" role="status">{icon(ico, 13)}{esc(text)}</span>'
 
 
 def measures(items: list[tuple[str, str, str]]) -> str:
-    """One compact measurement group (label, value, unit) instead of separate tiles."""
     cells = "".join(f'<div><dt>{esc(lbl)}</dt><dd>{esc(v)}<span>{esc(u)}</span></dd></div>' for lbl, v, u in items)
     return f'<dl class="ra-measures">{cells}</dl>'
 
 
-def legend(items: list[tuple[str, tuple[int, int, int], str]]) -> str:
+def legend(items: list[tuple[str, tuple[int, int, int], str]], uncertainty: bool = False) -> str:
     out = []
     for label, rgb, kind in items:
         col = "rgb({},{},{})".format(*rgb)
         out.append(f'<span class="ra-leg"><i class="ra-leg-{kind}" style="--c:{col}"></i>{esc(label)}</span>')
+    if uncertainty:
+        c = "rgb({},{},{})".format(*OVERLAY["uncertainty"])
+        out.append(f'<span class="ra-leg">Uncertainty <i class="ra-leg-grad" style="--c:{c}"></i>'
+                   '<span class="ra-leg-s">low → high</span></span>')
     return f'<div class="ra-legend" aria-label="Overlay legend">{"".join(out)}</div>'
 
 
@@ -246,8 +255,8 @@ def flow(steps: list[tuple[str, str, str]]) -> str:
 
 
 def note(text: str, kind: str = "info") -> str:
-    ico = {"info": "info", "warn": "alert", "neutral": "check", "critical": "alert"}[kind]
-    return f'<div class="ra-note ra-note-{kind}" role="note">{icon(ico, 16)}<div>{text}</div></div>'
+    ico = {"info": "info", "warn": "alert", "neutral": "check", "critical": "alert", "technical": "square"}[kind]
+    return f'<div class="ra-note ra-note-{kind}" role="note">{icon(ico, 15)}<div>{text}</div></div>'
 
 
 def page_title(title: str, subtitle: str | None = None) -> str:
@@ -258,300 +267,309 @@ def page_title(title: str, subtitle: str | None = None) -> str:
 section_title = page_title
 
 
-def panel_title(n: str | None, title: str, sub: str | None = None) -> str:
+def panel_title(n: str | None, title: str, sub: str | None = None, right_html: str = "", divider: bool = False) -> str:
     num = f'<span class="ra-pn">{esc(n)}</span>' if n else ""
     s = f'<div class="ra-panel-s">{esc(sub)}</div>' if sub else ""
-    return f'<div class="ra-panel-t">{num}{esc(title)}</div>{s}'
+    cls = "ra-panel-h ra-panel-div" if divider else "ra-panel-h"
+    return f'<div class="{cls}"><div class="ra-panel-t">{num}{esc(title)}</div>{right_html}</div>{s}'
 
 
 def cell(label: str, content_html: str) -> str:
-    """Worklist cell; the label is visible only when the row wraps on a narrow screen."""
-    return f'<div class="ra-cell"><span class="ra-cell-l">{esc(label)}</span>{content_html}</div>'
+    return f'<div class="ra-cell">{content_html}</div>'
+
+
+def mobile_card(position: int, case_id: str, status: str, qc_kind: str, qc_label: str, ai_line: str,
+                hint: str = "") -> str:
+    """Case-first mobile card: identity + status, then QC, then AI visibility. One action below it."""
+    return (f'<div class="ra-mcard"><div class="ra-mc-k">Case {position:02d}</div>'
+            f'<div class="ra-mc-top"><span class="ra-case">{esc(case_id)}</span>{status_badge(status)}</div>'
+            f'<div class="ra-mc-row">{qc_badge(qc_kind, qc_label)}</div>'
+            f'<div class="ra-mc-row">{ai_line}</div>'
+            + (f'<div class="ra-mc-hint">{esc(hint)}</div>' if hint else "") + '</div>')
 
 
 # --------------------------------------------------------------------------- CSS
 CSS = f"""
 :root {{
   --ra-navy:{NAVY}; --ra-navy-2:{NAVY_2}; --ra-ink:{INK}; --ra-slate:{SLATE};
-  --ra-teal:{TEAL}; --ra-teal-dark:{TEAL_DARK}; --ra-teal-tint:{TEAL_TINT}; --ra-teal-soft:{TEAL_SOFT};
-  --ra-red:{RED}; --ra-red-bg:{RED_BG}; --ra-amber:{AMBER}; --ra-amber-bg:{AMBER_BG}; --ra-slate-bg:{SLATE_BG};
-  --ra-surface:{SURFACE}; --ra-border:{BORDER}; --ra-border-strong:{BORDER_STRONG}; --ra-viewer:{VIEWER_BG};
-  --ra-radius:10px;
+  --ra-teal:{TEAL}; --ra-teal-dark:{TEAL_DARK}; --ra-red:{RED}; --ra-red-bg:{RED_BG};
+  --ra-amber:{AMBER}; --ra-amber-bg:{AMBER_BG}; --ra-amber-ink:{AMBER_INK}; --ra-slate-bg:{SLATE_BG};
+  --ra-select:{SELECT_BG}; --ra-hover:{HOVER_BG}; --ra-surface:{SURFACE}; --ra-border:{BORDER};
+  --ra-border-strong:{BORDER_STRONG}; --ra-viewer:{VIEWER_BG}; --ra-vink:{VIEWER_INK};
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --r-ctl:8px; --r-panel:12px; --h-ctl:44px;
 }}
-/* ---------- page + type scale: body 16, labels 14-15, secondary 13-14, case id 19, headings 22 */
+/* ---------- shell: light, navy structure. Type: body 15-16, table 14-15, meta 13-14, case 18, heading 22 */
 [data-testid="stApp"], [data-testid="stAppViewContainer"] {{ background:#FFFFFF; color:var(--ra-ink); }}
-[data-testid="stMainBlockContainer"], .block-container {{ max-width:1600px; padding:3.1rem 1.5rem 3rem; }}
+[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"] {{ display:none !important; }}
+[data-testid="stMainBlockContainer"], .block-container {{ max-width:1680px; padding:3.1rem var(--s5) var(--s6); }}
 [data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li {{ font-size:1rem; line-height:1.5; }}
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size:0.875rem; color:var(--ra-slate); }}
-[data-testid="stWidgetLabel"] p {{ font-size:0.9375rem !important; font-weight:500; color:var(--ra-ink); }}
+[data-testid="stMarkdownContainer"] li {{ font-size:0.9688rem; line-height:1.5; }}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size:0.8438rem; color:var(--ra-slate); }}
+[data-testid="stWidgetLabel"] p {{ font-size:0.875rem !important; font-weight:500; color:var(--ra-ink); }}
 h1, h2, h3, h4 {{ color:var(--ra-navy) !important; letter-spacing:-0.005em; }}
-[data-testid="stMarkdownContainer"] h4 {{ font-size:1.0625rem; font-weight:700; padding:0.2rem 0 0.1rem; }}
-header[data-testid="stHeader"] {{ background:rgba(255,255,255,0.96); border-bottom:1px solid var(--ra-border); }}
+[data-testid="stMarkdownContainer"] h4 {{ font-size:1rem; font-weight:700; padding:var(--s2) 0 var(--s1); }}
+header[data-testid="stHeader"] {{ background:rgba(255,255,255,0.97); border-bottom:1px solid var(--ra-border); }}
 a {{ color:var(--ra-teal-dark); }}
 .ra-muted {{ color:var(--ra-slate); font-weight:400; }}
 .ra-ico {{ flex:none; vertical-align:-2px; }}
 .ra-device-note {{ display:none; }}
+[data-testid="stVerticalBlock"] {{ gap:var(--s3); }}
+/* markdown blocks that hold only our HTML components must not pull the next element up */
+[data-testid="stMarkdownContainer"]:not(:has(> p, > ul, > ol, > h4)) {{ margin-bottom:0 !important; }}
 
-/* ---------- sidebar */
-[data-testid="stSidebar"] {{ background:var(--ra-surface); border-right:1px solid var(--ra-border); }}
-.ra-side-t {{ font-size:0.9375rem; font-weight:700; color:var(--ra-navy); margin:0.3rem 0 0.1rem;
-  text-transform:uppercase; letter-spacing:0.04em; }}
-.ra-side-s {{ font-size:0.875rem; color:var(--ra-slate); margin-bottom:0.3rem; }}
-.ra-kv {{ font-size:0.875rem; color:var(--ra-ink); line-height:1.6; }}
-.ra-kv b {{ font-weight:600; }}
-
-/* ---------- slim session header */
-.ra-top {{ background:var(--ra-navy); color:#fff; border-radius:var(--ra-radius); padding:8px 14px;
-  display:flex; flex-wrap:wrap; gap:6px 16px; align-items:center; justify-content:space-between; margin-bottom:8px; }}
-.ra-brand {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
-.ra-logo {{ width:30px; height:30px; flex:none; }}
-.ra-title {{ font-size:1.375rem; font-weight:700; color:#fff; letter-spacing:-0.01em; }}
-.ra-top-meta {{ display:flex; flex-wrap:wrap; gap:6px; }}
-.ra-chip {{ display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:3px 10px;
-  font-size:0.8125rem; line-height:1.3; border:1px solid rgba(255,255,255,0.3); color:#DCE6F2; }}
-.ra-chip b {{ color:#fff; font-weight:600; }}
-.ra-chip-research {{ border-color:#FDE7B0; color:#FDE7B0; font-weight:600; }}
-
-/* ---------- primary navigation: two modes */
-.st-key-nav {{ margin:0 0 6px; }}
+/* ---------- top bar (one band): identity · modes · state · session · research */
+.st-key-rx_topbar [data-testid="stHorizontalBlock"] {{ gap:var(--s2) var(--s3) !important; }}
+.st-key-topbar {{ border-bottom:1px solid var(--ra-border); padding-bottom:var(--s3); margin-bottom:var(--s1); }}
+.ra-id {{ display:flex; align-items:baseline; gap:var(--s2); flex-wrap:wrap; }}
+.ra-prod {{ font-size:1.25rem; font-weight:700; color:var(--ra-navy); }}
+.ra-prod-sub {{ font-size:1rem; color:var(--ra-slate); font-weight:500; }}
+.ra-research {{ display:inline-flex; gap:4px; align-items:center; font-size:0.8125rem; font-weight:600;
+  color:var(--ra-amber-ink); background:var(--ra-amber-bg); border-radius:6px; padding:2px 8px; }}
+.ra-state {{ font-size:0.8438rem; color:var(--ra-slate); margin-top:2px; }}
+.ra-state b {{ color:var(--ra-ink); font-weight:600; }}
 .st-key-nav [data-testid="stWidgetLabel"] {{ display:none; }}
-.st-key-nav button {{ min-height:44px; padding:0 18px; font-size:1rem; font-weight:600; color:var(--ra-navy); }}
+.st-key-nav button {{ min-height:40px; padding:0 var(--s4); font-weight:600; color:var(--ra-navy); }}
 .st-key-nav [data-testid="stButtonGroup"] button[aria-checked="true"] {{
   background:var(--ra-navy) !important; color:#fff !important; border-color:var(--ra-navy) !important; }}
 
 /* ---------- headings */
-.ra-sec {{ margin:4px 0 6px; }}
+.ra-sec {{ margin:var(--s1) 0 var(--s1); }}
 .ra-sec-t {{ font-size:1.375rem !important; font-weight:700; margin:0 !important; padding:0 !important; }}
 .ra-sec-sub {{ color:var(--ra-slate); margin:2px 0 0; font-size:0.9375rem; }}
-.ra-crumb {{ font-size:0.875rem; color:var(--ra-slate); margin-bottom:2px; }}
+.ra-crumb {{ font-size:0.8438rem; color:var(--ra-slate); }}
 
-/* ---------- status line (slim queue summary) */
-.ra-statusline {{ display:flex; flex-wrap:wrap; gap:4px 0; align-items:center; font-size:0.9375rem;
-  border-top:1px solid var(--ra-border); border-bottom:1px solid var(--ra-border); padding:7px 2px; margin:4px 0 8px; }}
-.ra-sl {{ display:inline-flex; gap:5px; align-items:baseline; padding-right:14px; margin-right:14px;
-  border-right:1px solid var(--ra-border); }}
-.ra-sl:last-of-type {{ border-right:none; }}
-.ra-sl-l {{ color:var(--ra-slate); }}
-.ra-sl b {{ color:var(--ra-navy); font-variant-numeric:tabular-nums; }}
-.ra-sl-urgent b {{ color:var(--ra-red); }} .ra-sl-caution b {{ color:var(--ra-amber); }}
-.ra-sl-note {{ color:var(--ra-slate); font-size:0.875rem; display:inline-flex; gap:5px; align-items:center; }}
+/* ---------- queue summary: four separate concepts */
+.ra-summary {{ display:flex; flex-wrap:wrap; gap:var(--s1) var(--s5); font-size:0.9375rem; padding:var(--s2) 0;
+  border-bottom:1px solid var(--ra-border); }}
+.ra-sum {{ display:inline-flex; gap:6px; align-items:center; color:var(--ra-ink); }}
+.ra-sum b {{ font-variant-numeric:tabular-nums; }}
+.ra-sum-technical {{ color:var(--ra-amber-ink); }} .ra-sum-urgency {{ color:var(--ra-red); }}
+.ra-sum-evidence {{ color:var(--ra-amber-ink); }}
 
-/* ---------- controls: touch targets + focus */
+/* ---------- controls: one height, one radius; teal only for primary actions */
 [data-testid="stButton"] button, [data-testid="stDownloadButton"] button, [data-testid="stPopover"] button,
-[data-testid="stFormSubmitButton"] button {{ min-height:44px; padding:0.45rem 1rem; border-radius:8px;
+[data-testid="stFormSubmitButton"] button {{ min-height:var(--h-ctl); padding:0 var(--s4); border-radius:var(--r-ctl);
   font-size:0.9375rem; font-weight:600; width:100%; }}
 [data-testid="stBaseButton-primary"] {{ background:var(--ra-teal); border-color:var(--ra-teal); color:#fff; }}
 [data-testid="stBaseButton-primary"]:hover {{ background:var(--ra-teal-dark); border-color:var(--ra-teal-dark); color:#fff; }}
-[data-testid="stBaseButton-secondary"] {{ background:#fff; color:var(--ra-navy); border:1.5px solid var(--ra-border-strong); }}
-[data-testid="stBaseButton-secondary"]:hover {{ background:var(--ra-teal-tint); color:var(--ra-teal-dark); border-color:var(--ra-teal); }}
-[data-testid="stBaseButton-tertiary"] {{ color:var(--ra-navy); justify-content:flex-start; }}
-[data-testid="stButtonGroup"] button {{ min-height:44px; font-size:0.9375rem; padding:0 16px; color:var(--ra-navy); }}
-[data-testid="stButtonGroup"] button[aria-checked="true"] {{ background:var(--ra-teal-tint); color:var(--ra-teal-dark);
-  border-color:var(--ra-teal); }}
+[data-testid="stBaseButton-secondary"] {{ background:#fff; color:var(--ra-navy); border:1px solid var(--ra-border-strong); }}
+[data-testid="stBaseButton-secondary"]:hover {{ background:var(--ra-hover); color:var(--ra-navy); border-color:var(--ra-navy); }}
+[data-testid="stBaseButton-tertiary"] {{ color:var(--ra-navy); }}
+[data-testid="stButtonGroup"] button {{ min-height:var(--h-ctl); font-size:0.9375rem; padding:0 var(--s4); color:var(--ra-navy); }}
+[data-testid="stButtonGroup"] button[aria-checked="true"] {{ background:var(--ra-select); color:var(--ra-navy);
+  border-color:var(--ra-navy); font-weight:700; }}
 [class*="st-key-imp_"], [class*="st-key-final_"] {{ width:100% !important; }}
 [class*="st-key-imp_"] [role="radiogroup"], [class*="st-key-final_"] [role="radiogroup"] {{ display:flex; width:100%; }}
 [class*="st-key-imp_"] [role="radiogroup"] button, [class*="st-key-final_"] [role="radiogroup"] button {{
-  flex:1 1 0; min-height:52px; font-size:1rem; }}
+  flex:1 1 0; min-height:48px; font-size:0.9688rem; }}
 div[data-baseweb="select"] > div, [data-testid="stSelectbox"] [role="group"], [data-testid="stMultiSelect"] [role="group"],
-[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input {{ min-height:44px; font-size:0.9375rem; }}
-[data-testid="stTooltipIcon"] button {{ min-width:28px; min-height:28px; display:inline-flex; align-items:center; justify-content:center; }}
-[data-testid="stSidebarCollapseButton"] button, [data-testid="stExpandSidebarButton"], [data-testid="stMainMenu"] button {{
-  min-width:40px; min-height:40px; }}
-[data-testid="stSlider"] [role="slider"] {{ width:24px; height:24px; }}
+[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input {{ min-height:var(--h-ctl); font-size:0.9375rem; }}
+[data-testid="stWidgetLabel"] [data-testid="stTooltipIcon"] button {{ min-width:28px; min-height:28px; display:inline-flex; align-items:center; justify-content:center; }}
+[data-testid="stMainMenu"] button {{ min-width:40px; min-height:40px; }}
+[data-testid="stSlider"] [role="slider"] {{ width:22px; height:22px; }}
 [data-testid="stCheckbox"] label {{ min-height:40px; display:flex; align-items:center; }}
-[data-testid="stExpander"] details {{ border-radius:8px; border:1px solid var(--ra-border); }}
-[data-testid="stExpander"] summary {{ min-height:44px; font-weight:600; font-size:0.9375rem; color:var(--ra-navy); }}
+[data-testid="stExpander"] details {{ border-radius:var(--r-ctl); border:1px solid var(--ra-border); }}
+[data-testid="stExpander"] summary {{ min-height:var(--h-ctl); font-weight:600; font-size:0.9375rem; color:var(--ra-navy); }}
 button:focus-visible, [role="slider"]:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible,
-[tabindex]:focus-visible {{ outline:3px solid var(--ra-teal) !important; outline-offset:2px !important; }}
+[tabindex]:focus-visible {{ outline:3px solid var(--ra-navy) !important; outline-offset:2px !important; }}
 @media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ animation:none !important; transition:none !important; }} }}
 
-/* ---------- worklist: dense rows, consistent height, separators instead of cards */
-.st-key-rowhead {{ border-bottom:2px solid var(--ra-border-strong); padding:4px 6px; }}
-.ra-th {{ font-size:0.875rem; font-weight:600; color:var(--ra-slate); }}
-[class*="st-key-row_"] {{ border-bottom:1px solid var(--ra-border); padding:4px 6px; gap:0 !important; }}
-[class*="st-key-row_"]:hover {{ background:#FAFBFC; }}
+/* ---------- worklist table: neutral rows, one selection model, hover != selection */
+.st-key-rowhead {{ border-bottom:1px solid var(--ra-border-strong); padding:var(--s1) var(--s2); }}
+.ra-th {{ font-size:0.8125rem; font-weight:600; color:var(--ra-slate); text-transform:uppercase; letter-spacing:0.04em; }}
+[class*="st-key-row_"] {{ border-bottom:1px solid var(--ra-border); padding:var(--s1) var(--s2); gap:0 !important; }}
+[class*="st-key-row_"]:hover {{ background:var(--ra-hover); }}
 [class*="st-key-row_"] [data-testid="stHorizontalBlock"], .st-key-rowhead [data-testid="stHorizontalBlock"] {{
-  flex-wrap:wrap !important; align-items:center; gap:2px 14px !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"], .st-key-rowhead [data-testid="stColumn"] {{ width:auto !important;
-  min-width:0 !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"]:nth-child(1), .st-key-rowhead [data-testid="stColumn"]:nth-child(1) {{ flex:0 0 40px !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"]:nth-child(2), .st-key-rowhead [data-testid="stColumn"]:nth-child(2) {{ flex:1 1 110px !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"]:nth-child(3), .st-key-rowhead [data-testid="stColumn"]:nth-child(3) {{ flex:1 1 190px !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"]:nth-child(4), .st-key-rowhead [data-testid="stColumn"]:nth-child(4) {{ flex:2 1 250px !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"]:nth-child(5), .st-key-rowhead [data-testid="stColumn"]:nth-child(5) {{ flex:1 1 200px !important; }}
-[class*="st-key-row_"] [data-testid="stColumn"]:nth-child(6), .st-key-rowhead [data-testid="stColumn"]:nth-child(6) {{ flex:0 0 116px !important; }}
+  flex-wrap:nowrap !important; align-items:center; gap:var(--s4) !important; }}
+[class*="st-key-row_"] [data-testid="stColumn"], .st-key-rowhead [data-testid="stColumn"] {{ min-width:0 !important; }}
 [class*="st-key-row_"] [data-testid="stMarkdownContainer"], .st-key-rowhead [data-testid="stMarkdownContainer"] {{
   margin-bottom:0 !important; }}
-.ra-pos {{ font-size:0.9375rem; font-weight:600; color:var(--ra-slate); font-variant-numeric:tabular-nums; }}
-.ra-case {{ font-size:1.1875rem; font-weight:700; color:var(--ra-navy); }}
+.ra-row-sel {{ background:var(--ra-select) !important; box-shadow:inset 3px 0 0 var(--ra-navy); }}
+.ra-pos {{ font-size:0.875rem; color:var(--ra-slate); font-variant-numeric:tabular-nums; }}
+.ra-case {{ font-size:1.125rem; font-weight:700; color:var(--ra-navy); }}
 .ra-cell {{ font-size:0.9375rem; line-height:1.35; }}
-.ra-cell-l {{ display:none; }}
 .ra-cell-d {{ font-size:0.8125rem; color:var(--ra-slate); margin-top:2px; }}
-.ra-p {{ font-variant-numeric:tabular-nums; font-weight:600; color:var(--ra-navy); margin-left:6px; }}
-.ra-flag {{ color:var(--ra-amber); font-size:0.8125rem; font-weight:600; margin-left:6px; white-space:nowrap; }}
+.ra-p {{ font-variant-numeric:tabular-nums; font-weight:600; color:var(--ra-ink); margin-left:6px; }}
+.ra-flag {{ color:var(--ra-amber-ink); font-size:0.8125rem; font-weight:600; margin-left:6px; white-space:nowrap; }}
+.ra-desk {{ }} .ra-mobile {{ display:none; }}
+.st-key-mobilelist {{ display:none; }}
 
-/* ---------- badges and status (shape + word + colour) */
-.ra-badge, .ra-status, .ra-qc, .ra-hidden {{ display:inline-flex; align-items:center; gap:5px; font-size:0.875rem;
-  line-height:1.25; border-radius:6px; }}
-.ra-badge {{ padding:2px 8px; font-weight:600; border:1px solid currentColor; }}
-.ra-b-urgent {{ color:var(--ra-red); background:var(--ra-red-bg); }}
-.ra-b-caution {{ color:var(--ra-amber); background:var(--ra-amber-bg); }}
-.ra-b-caution-outline {{ color:var(--ra-amber); background:#fff; }}
-.ra-b-neutral {{ color:var(--ra-slate); background:var(--ra-slate-bg); }}
-.ra-b-neutral-outline {{ color:var(--ra-slate); background:#fff; }}
-.ra-status {{ font-weight:500; color:var(--ra-ink); }}
-.ra-s-unread {{ color:var(--ra-slate); }} .ra-s-progress {{ color:var(--ra-navy); }}
-.ra-s-done {{ color:var(--ra-navy); }} .ra-s-caution {{ color:var(--ra-amber); }}
-.ra-qc-ok {{ color:var(--ra-slate); }}
-.ra-qc-fail {{ color:var(--ra-amber); font-weight:600; }}
-.ra-hidden {{ color:var(--ra-slate); font-style:normal; }}
+/* ---------- tags: icon + coloured text, no fills or borders (one emphasis technique) */
+.ra-tag {{ display:inline-flex; align-items:center; gap:5px; font-size:0.875rem; line-height:1.3; font-weight:500; }}
+.ra-t-neutral {{ color:var(--ra-slate); }} .ra-t-navy {{ color:var(--ra-navy); }}
+.ra-t-caution {{ color:var(--ra-amber-ink); }} .ra-t-technical {{ color:var(--ra-amber-ink); font-weight:600; }}
+.ra-t-urgent {{ color:var(--ra-red); font-weight:700; }}
 
-/* ---------- meter */
-.ra-meter {{ position:relative; height:8px; border-radius:999px; background:#E4EAF0; margin:6px 0 4px; }}
-.ra-meter-fill {{ height:100%; border-radius:999px; background:var(--ra-navy-2); }}
-.ra-meter-thr {{ position:absolute; top:-4px; width:2px; height:16px; background:var(--ra-ink); }}
+/* ---------- reading view: case bar, progress */
+.ra-caseid {{ display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--s2) var(--s3); }}
+.ra-meta {{ font-size:0.8438rem; color:var(--ra-slate); }}
+ol.ra-progress {{ list-style:none; display:flex !important; flex-direction:row !important; flex-wrap:wrap; gap:var(--s1) var(--s4);
+  padding:0 !important; margin:0 !important; }}
+.ra-progress .ra-pg {{ margin:0 !important; padding:0 !important; display:flex; align-items:center; gap:6px; font-size:0.8438rem;
+  color:var(--ra-slate); }}
+.ra-pg-n {{ width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+  border:1.5px solid var(--ra-border-strong); font-size:0.6875rem; font-weight:700; }}
+.ra-pg-current {{ color:var(--ra-navy) !important; font-weight:700; }}
+.ra-pg-current .ra-pg-n {{ background:var(--ra-navy); border-color:var(--ra-navy); color:#fff; }}
+.ra-pg-done .ra-pg-n {{ background:var(--ra-slate-bg); border-color:var(--ra-slate); color:var(--ra-navy); }}
+.st-key-pending .ra-panel-s {{ margin-bottom:var(--s2); }}
+.st-key-pending {{ border:1px solid var(--ra-amber); background:var(--ra-amber-bg); border-radius:var(--r-panel); padding:var(--s3) var(--s4); }}
 
-/* ---------- case bar + stepper */
-.ra-casehead {{ display:flex; flex-wrap:wrap; gap:4px 12px; align-items:baseline; margin:2px 0 4px; }}
-.ra-casehead .ra-case {{ font-size:1.1875rem; }}
-.ra-meta {{ font-size:0.875rem; color:var(--ra-slate); }}
-ol.ra-steps {{ list-style:none; display:flex !important; flex-direction:row !important; flex-wrap:wrap; gap:6px 18px;
-  padding:0 !important; margin:2px 0 8px !important; }}
-.ra-steps .ra-step {{ margin:0 !important; padding:0 !important; display:flex; align-items:center; gap:7px;
-  font-size:0.875rem; color:var(--ra-slate); font-weight:500; }}
-.ra-step-n {{ width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
-  border:1.5px solid var(--ra-border-strong); font-size:0.75rem; font-weight:700; }}
-.ra-step-current {{ color:var(--ra-navy) !important; font-weight:700 !important; }}
-.ra-step-current .ra-step-n {{ background:var(--ra-navy); border-color:var(--ra-navy); color:#fff; }}
-.ra-step-done .ra-step-n {{ background:var(--ra-slate-bg); border-color:var(--ra-slate); color:var(--ra-navy); }}
-
-/* ---------- viewer: the one strong boundary on the page */
-.st-key-viewer {{ background:var(--ra-viewer); border-radius:var(--ra-radius); padding:10px 12px 14px; }}
+/* ---------- CT viewer: dark, unobtrusive controls */
+.st-key-viewer {{ background:var(--ra-viewer); border-radius:var(--r-panel); padding:var(--s3) var(--s3) var(--s4); gap:var(--s2) !important; }}
 .st-key-viewer [data-testid="stMarkdownContainer"] {{ margin-bottom:0 !important; }}
 .st-key-viewer [data-testid="stWidgetLabel"] p, .st-key-viewer [data-testid="stCheckbox"] p,
-.st-key-viewer [data-testid="stCaptionContainer"] p {{ color:#D7E1EC !important; }}
+.st-key-viewer [data-testid="stCaptionContainer"] p {{ color:var(--ra-vink) !important; }}
 .st-key-viewer button p {{ color:inherit !important; }}
-.st-key-viewer [data-testid="stPopover"] button {{ background:#132540; color:#E6EDF5; border:1.5px solid #3B5373; }}
-.st-key-viewer [data-testid="stPopover"] button:hover {{ border-color:{TEAL_SOFT}; color:#fff; }}
+.st-key-viewer [data-testid="stBaseButton-secondary"], .st-key-viewer [data-testid="stPopover"] button {{
+  background:#132540; color:#E6EDF5; border:1px solid #3B5373; min-height:40px; }}
+.st-key-viewer [data-testid="stBaseButton-secondary"]:hover, .st-key-viewer [data-testid="stPopover"] button:hover {{
+  border-color:#C9D6E3; color:#fff; background:#1B3254; }}
 .st-key-viewer [data-testid="stImage"], .st-key-viewer [data-testid="stImageContainer"] {{ background:#000; border-radius:6px; }}
 .st-key-viewer img {{ border-radius:4px; max-width:100%; height:auto; }}
-.st-key-viewer [data-testid="stBaseButton-secondary"] {{ background:#132540; color:#E6EDF5; border-color:#3B5373; }}
-.st-key-viewer [data-testid="stBaseButton-secondary"]:hover {{ background:#1B3254; color:#fff; border-color:{TEAL_SOFT}; }}
-.st-key-viewer [data-testid="stButtonGroup"] button {{ background:#132540; color:#E6EDF5; border-color:#3B5373; }}
-.st-key-viewer [data-testid="stButtonGroup"] button[aria-checked="true"] {{ background:#E6EDF5; color:var(--ra-navy);
-  border-color:#E6EDF5; }}
-.st-key-viewer [data-testid="stSlider"] [role="slider"] {{ background:#E6EDF5; }}
-/* slice step buttons: icon (and shortcut hint) only; the label stays available to screen readers */
+.st-key-viewer [data-testid="stSlider"] [role="group"] > div > div:first-child {{ filter:brightness(3.4) saturate(0.5); }}
+.st-key-viewer [data-testid="stSlider"] [role="group"] > div > div:nth-child(2) {{ background-color:#E6EDF5 !important; }}
+.st-key-viewer [data-testid="stSliderThumbValue"] p, .st-key-viewer [data-testid="stSliderTickBar"] p {{ color:#E6EDF5 !important; }}
+.ra-vgroup {{ font-size:0.6875rem; letter-spacing:0.08em; text-transform:uppercase; color:#93A6BC; font-weight:700; }}
+.ra-vinfo {{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:var(--s1) var(--s3); font-size:0.8438rem;
+  color:var(--ra-vink); font-variant-numeric:tabular-nums; }}
+.ra-vinfo b {{ color:#fff; }}
+.ra-vwarn {{ color:#FFD9A0; }}
+.ra-legend {{ display:flex; flex-wrap:wrap; gap:var(--s1) var(--s4); font-size:0.8438rem; color:var(--ra-vink); }}
+.ra-leg {{ display:inline-flex; align-items:center; gap:7px; }}
+.ra-leg i {{ display:inline-block; width:20px; height:10px; border-radius:2px; background:#2B3A4A; }}
+.ra-leg-line {{ box-shadow:inset 0 0 0 2px var(--c); }}
+.ra-leg-fill {{ background:var(--c) !important; }}
+.ra-leg-dotted {{ background:repeating-linear-gradient(90deg, var(--c) 0 4px, #2B3A4A 4px 7px) !important; }}
+.ra-leg-grad {{ width:56px !important; background:linear-gradient(90deg, rgba(199,125,255,0.05), var(--c)) !important; }}
+.ra-leg-s {{ color:#93A6BC; }}
 .st-key-slice_prev [data-testid="stMarkdownContainer"], .st-key-slice_next [data-testid="stMarkdownContainer"] {{
   position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }}
 .st-key-slice_prev button, .st-key-slice_next button {{ padding:0 6px !important; }}
-.ra-vinfo {{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; font-size:0.875rem;
-  color:#D7E1EC; font-variant-numeric:tabular-nums; }}
-.ra-vinfo b {{ color:#fff; }}
-.ra-legend {{ display:flex; flex-wrap:wrap; gap:4px 16px; font-size:0.875rem; color:#D7E1EC; margin:4px 0 0; }}
-.ra-leg {{ display:inline-flex; align-items:center; gap:7px; }}
-.ra-leg i {{ display:inline-block; width:20px; height:11px; border-radius:2px; background:#2B3A4A; }}
-.ra-leg-line {{ box-shadow:inset 0 0 0 2.5px var(--c); }}
-.ra-leg-fill {{ background:var(--c) !important; }}
-.ra-leg-dotted {{ background:repeating-linear-gradient(90deg, var(--c) 0 4px, #2B3A4A 4px 7px) !important; }}
 
-/* ---------- evidence + decision panels: one surface each, separators inside */
-.st-key-evidence, .st-key-decision, .st-key-impression, .st-key-simulation {{ border:1px solid var(--ra-border);
-  border-radius:var(--ra-radius); padding:12px 14px; background:#fff; }}
-.st-key-decision {{ border:2px solid var(--ra-navy); }}
-.st-key-impression {{ border:2px solid var(--ra-navy); }}
-.ra-panel-t {{ font-size:1.0625rem; font-weight:700; color:var(--ra-navy); display:flex; align-items:center; gap:8px; }}
-.ra-pn {{ width:24px; height:24px; border-radius:50%; background:var(--ra-navy); color:#fff; font-size:0.8125rem;
-  display:inline-flex; align-items:center; justify-content:center; }}
-.ra-panel-s {{ font-size:0.9375rem; color:var(--ra-slate); margin:2px 0 4px; }}
-.ra-compare {{ display:flex; flex-wrap:wrap; gap:8px 22px; align-items:center; background:var(--ra-slate-bg);
-  border-radius:8px; padding:8px 12px; margin:4px 0 8px; font-size:0.9375rem; }}
+/* ---------- side panel: scrolls on its own; the decision stays visible at its foot */
+[data-testid="stLayoutWrapper"]:has(> .st-key-sidepanel) {{ flex:1 1 auto; align-self:stretch; }}
+.st-key-sidepanel {{ position:sticky; top:4.25rem; max-height:calc(100vh - 14rem); min-height:22rem; overflow-y:auto; overflow-x:hidden;
+  border:1px solid var(--ra-border); border-radius:var(--r-panel); padding:var(--s3) var(--s4) 0; gap:var(--s3) !important; }}
+[data-testid="stLayoutWrapper"]:has(> .st-key-decision) {{ position:sticky; bottom:0; z-index:3; margin:auto calc(-1 * var(--s4)) 0;
+  width:calc(100% + 2 * var(--s4)) !important; max-width:none !important; background:#fff; border-top:2px solid var(--ra-navy);
+  box-shadow:0 -6px 14px rgba(16,45,82,0.08); }}
+.st-key-decision {{ background:#fff; padding:var(--s3) var(--s4); }}
+.st-key-impression {{ gap:var(--s3) !important; }}
+.ra-panel-div {{ border-top:1px solid var(--ra-border); padding-top:var(--s3); margin-top:var(--s2); }}
+.ra-panel-h {{ display:flex; justify-content:space-between; align-items:center; gap:var(--s2); flex-wrap:wrap; }}
+.ra-panel-t {{ font-size:1rem; font-weight:700; color:var(--ra-navy); display:flex; align-items:center; gap:var(--s2); }}
+.ra-pn {{ font-size:0.75rem; font-weight:700; color:var(--ra-slate); letter-spacing:0.04em; }}
+.ra-panel-s {{ font-size:0.875rem; color:var(--ra-slate); }}
+.ra-cmp {{ display:grid; grid-template-columns:1fr 1fr; gap:var(--s3); }}
 .ra-k {{ font-size:0.8125rem; color:var(--ra-slate); }}
-.ra-rel {{ font-size:0.875rem; font-weight:600; border-radius:6px; padding:2px 8px; }}
-.ra-rel-same {{ color:var(--ra-navy); background:#fff; border:1px solid var(--ra-border-strong); }}
-.ra-rel-diff {{ color:var(--ra-amber); background:#fff; border:1px solid var(--ra-amber); }}
-.ra-ai {{ margin:2px 0 6px; }}
-.ra-ai-head {{ font-size:1.1875rem; font-weight:700; color:var(--ra-navy); line-height:1.3; }}
-.ra-ai-target {{ font-size:0.9375rem; margin-top:4px; }}
-.ra-ai-target b {{ font-variant-numeric:tabular-nums; color:var(--ra-navy); }}
-.ra-ai-unc {{ font-size:0.9375rem; margin-top:4px; }}
-.ra-unc-high {{ color:var(--ra-amber); font-weight:600; }}
-.ra-ag {{ display:flex; gap:7px; align-items:flex-start; border-radius:8px; padding:6px 10px; margin-top:8px; font-size:0.9375rem; }}
-.ra-ag .ra-ico {{ margin-top:3px; }}
-.ra-ag-neutral {{ background:var(--ra-slate-bg); color:var(--ra-ink); }}
-.ra-ag-caution {{ background:var(--ra-amber-bg); color:#7A2E0E; }}
-.ra-valid {{ font-size:0.875rem; color:var(--ra-slate); margin-top:6px; display:flex; gap:6px; align-items:center; }}
-.ra-why {{ margin-top:6px; font-size:0.9375rem; }}
-.ra-why summary {{ cursor:pointer; color:var(--ra-navy); font-weight:600; min-height:32px; display:flex; align-items:center; }}
-.ra-why ul {{ margin:2px 0 0 1.1rem; padding:0; }}
-.ra-ai-withheld .ra-ai-body {{ font-size:0.9375rem; margin-top:4px; }}
-dl.ra-measures {{ display:flex; flex-wrap:wrap; gap:4px 0; margin:6px 0; padding:6px 0; border-top:1px solid var(--ra-border);
-  border-bottom:1px solid var(--ra-border); }}
-dl.ra-measures > div {{ padding:0 16px 0 0; margin-right:16px; border-right:1px solid var(--ra-border); }}
+.ra-v {{ font-size:0.9688rem; font-weight:600; color:var(--ra-ink); }}
+.ra-rel {{ font-size:0.875rem; color:var(--ra-slate); margin-top:var(--s1); }}
+.ra-rel-diff {{ color:var(--ra-navy); font-weight:600; }}
+.ra-ev-find {{ font-size:1.0625rem; font-weight:700; color:var(--ra-navy); display:flex; gap:6px; align-items:center; }}
+.ra-ev-p {{ display:flex; align-items:baseline; gap:var(--s3); margin-top:var(--s1); }}
+.ra-ev-num {{ font-size:1.75rem; font-weight:700; color:var(--ra-navy); font-variant-numeric:tabular-nums; line-height:1.1; }}
+.ra-ev-target {{ font-size:0.8438rem; color:var(--ra-slate); }}
+.ra-meter {{ position:relative; height:6px; border-radius:999px; background:#E4EAF0; margin:var(--s2) 0; }}
+.ra-meter-fill {{ height:100%; border-radius:999px; background:var(--ra-navy-2); }}
+.ra-meter-thr {{ position:absolute; top:-4px; width:2px; height:14px; background:var(--ra-ink); }}
+dl.ra-dl {{ margin:0; display:grid; gap:var(--s2); }}
+dl.ra-dl > div {{ display:grid; grid-template-columns:118px 1fr; gap:var(--s2); }}
+dl.ra-dl dt {{ font-size:0.8438rem; color:var(--ra-slate); }}
+dl.ra-dl dd {{ margin:0; font-size:0.9375rem; color:var(--ra-ink); }}
+.ra-dd-caution {{ color:var(--ra-amber-ink) !important; font-weight:600; }}
+.ra-dd-caution .ra-ico {{ margin-right:4px; }}
+.ra-interp {{ display:block; font-weight:400; color:var(--ra-slate); font-size:0.8438rem; margin-top:2px; }}
+.ra-ev-withheld .ra-ev-find {{ color:var(--ra-amber-ink); }}
+dl.ra-measures {{ display:flex; flex-wrap:wrap; gap:var(--s2) 0; margin:0; }}
+dl.ra-measures > div {{ padding:0 var(--s4) 0 0; margin-right:var(--s4); border-right:1px solid var(--ra-border); }}
 dl.ra-measures > div:last-child {{ border-right:none; }}
 dl.ra-measures dt {{ font-size:0.8125rem; color:var(--ra-slate); }}
-dl.ra-measures dd {{ margin:0; font-size:1.0625rem; font-weight:700; color:var(--ra-navy); font-variant-numeric:tabular-nums; }}
-dl.ra-measures dd span {{ font-size:0.875rem; font-weight:500; color:var(--ra-slate); margin-left:3px; }}
+dl.ra-measures dd {{ margin:0; font-size:1rem; font-weight:700; color:var(--ra-navy); font-variant-numeric:tabular-nums; }}
+dl.ra-measures dd span {{ font-size:0.8438rem; font-weight:500; color:var(--ra-slate); margin-left:3px; }}
+.ra-save {{ display:inline-flex; align-items:center; gap:5px; font-size:0.8438rem; font-weight:600; }}
+.ra-save-none {{ color:var(--ra-slate); }} .ra-save-unsaved {{ color:var(--ra-amber-ink); }}
+.ra-save-saved {{ color:var(--ra-navy); }} .ra-save-failed {{ color:var(--ra-red); }}
+.ra-saved {{ font-size:0.9063rem; color:var(--ra-ink); line-height:1.5; }}
+.ra-saved b {{ color:var(--ra-navy); }}
 
 /* ---------- notes */
-.ra-note {{ display:flex; gap:9px; align-items:flex-start; border-radius:8px; padding:8px 12px; margin:4px 0 8px; font-size:0.9375rem; }}
+.ra-note {{ display:flex; gap:var(--s2); align-items:flex-start; border-radius:var(--r-ctl); padding:var(--s2) var(--s3); font-size:0.9063rem; }}
 .ra-note .ra-ico {{ margin-top:3px; }}
 .ra-note-info {{ background:#EEF3F9; color:#1B3A5E; }}
 .ra-note-neutral {{ background:var(--ra-slate-bg); color:var(--ra-ink); }}
-.ra-note-warn {{ background:var(--ra-amber-bg); color:#7A2E0E; }}
+.ra-note-warn, .ra-note-technical {{ background:var(--ra-amber-bg); color:var(--ra-amber-ink); }}
 .ra-note-critical {{ background:var(--ra-red-bg); color:#7A1A12; }}
 
-/* ---------- report */
-.st-key-report_doc pre {{ background:#FFFFFF !important; border:1px solid var(--ra-border); border-radius:8px;
+/* ---------- report and research pages */
+.st-key-report_doc pre {{ background:#FFFFFF !important; border:1px solid var(--ra-border); border-radius:var(--r-ctl);
   white-space:pre-wrap !important; word-break:break-word; }}
 .st-key-report_doc code {{ font-size:0.875rem !important; color:var(--ra-ink) !important; line-height:1.55; }}
-
-/* ---------- flow diagram (About) */
-ol.ra-flow {{ list-style:none; display:flex !important; flex-direction:row; flex-wrap:wrap; gap:10px 26px;
-  padding:0 !important; margin:8px 0 14px !important; }}
-.ra-flow li {{ position:relative; margin:0 !important; padding:8px 12px !important; border-radius:8px; min-width:130px;
+ol.ra-flow {{ list-style:none; display:flex !important; flex-direction:row; flex-wrap:wrap; gap:var(--s3) var(--s5);
+  padding:0 !important; margin:var(--s2) 0 var(--s4) !important; }}
+.ra-flow li {{ position:relative; margin:0 !important; padding:var(--s2) var(--s3) !important; border-radius:var(--r-ctl); min-width:130px;
   border:1px solid var(--ra-border-strong); background:#fff; display:flex; flex-direction:column; gap:2px; }}
 .ra-flow li b {{ color:var(--ra-navy); font-size:0.9375rem; }}
 .ra-flow li span {{ color:var(--ra-slate); font-size:0.8125rem; }}
-.ra-flow li:not(:last-child)::after {{ content:"→"; position:absolute; right:-20px; top:50%; transform:translateY(-50%);
+.ra-flow li:not(:last-child)::after {{ content:"→"; position:absolute; right:-19px; top:50%; transform:translateY(-50%);
   color:var(--ra-slate); font-weight:700; }}
 .ra-flow-ai {{ border-color:var(--ra-navy) !important; }}
 .ra-flow-human {{ border:2px solid var(--ra-navy) !important; }}
 
-/* ---------- responsive */
+/* ---------- mobile: a separate component, not a compressed table */
+.ra-mcard {{ display:grid; gap:6px; }}
+.ra-mc-k {{ font-size:0.75rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ra-slate); font-weight:600; }}
+.ra-mc-top {{ display:flex; justify-content:space-between; align-items:baseline; gap:var(--s2); }}
+.ra-mc-top .ra-case {{ font-size:1.25rem; }}
+.ra-mcard .ra-p {{ font-size:0.875rem; }}
+.ra-mc-hint {{ font-size:0.875rem; color:var(--ra-ink); }}
+[class*="st-key-mcard_"] {{ border:1px solid var(--ra-border); border-radius:var(--r-panel); padding:var(--s4); gap:var(--s3) !important; }}
+[class*="st-key-mcard_"] [data-testid="stBaseButton-secondary"] {{ min-height:44px; }}
+[class*="st-key-mcard_"] [data-testid="stMarkdownContainer"] {{ margin-bottom:0 !important; }}
+[class*="st-key-go_"] button {{ justify-content:flex-start; }}
+[class*="st-key-go_"] button > div {{ justify-content:flex-start; width:100%; }}
+
 @media (max-width: 900px) {{
   .ra-device-note {{ display:block; }}
-  .st-key-casenav [data-testid="stHorizontalBlock"] {{ flex-wrap:nowrap !important; gap:8px !important; }}
-  .st-key-casenav [data-testid="stColumn"] {{ min-width:0 !important; width:auto !important; flex:0 0 52px !important; }}
-  .st-key-casenav [data-testid="stColumn"]:nth-child(2) {{ flex:1 1 auto !important; }}
+  .st-key-sidepanel {{ position:static; max-height:none; min-height:0; overflow:visible; }}
+  [data-testid="stLayoutWrapper"]:has(> .st-key-decision) {{ position:static; box-shadow:none; }}
+  .st-key-decision {{ box-shadow:none; }}
+  .st-key-casebar .st-key-rx_casenav [data-testid="stHorizontalBlock"] {{ flex-wrap:nowrap !important; }}
+  .st-key-casebar .st-key-rx_casenav [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(odd) {{
+    flex:0 0 64px !important; min-width:64px !important; }}
+  .st-key-casebar .st-key-rx_casenav [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {{
+    flex:1 1 0 !important; min-width:0 !important; }}
   .st-key-prev_case [data-testid="stMarkdownContainer"], .st-key-next_case [data-testid="stMarkdownContainer"] {{
     position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }}
-  .st-key-prev_case button, .st-key-next_case button {{ padding:0 !important; }}
 }}
 @media (max-width: 640px) {{
-  [data-testid="stMainBlockContainer"], .block-container {{ padding:3rem 0.75rem 3rem; }}
-  .ra-top-meta {{ display:none; }}
-  .ra-title {{ font-size:1.125rem; }}
-  .st-key-rowhead {{ display:none; }}
-  .ra-cell-l {{ display:inline; font-size:0.75rem; color:var(--ra-slate); text-transform:uppercase; letter-spacing:0.04em;
-    margin-right:6px; }}
-  [class*="st-key-row_"] {{ padding:8px 4px; }}
-  .ra-sl {{ padding-right:10px; margin-right:10px; }}
-  .st-key-nav {{ width:100% !important; }}
-  .st-key-nav [data-testid="stButtonGroup"], .st-key-nav [role="radiogroup"] {{ display:flex; width:100% !important; }}
+  [data-testid="stMainBlockContainer"], .block-container {{ padding:3rem var(--s3) var(--s5); }}
+  .st-key-desklist, .st-key-rowhead {{ display:none !important; }}
+  [data-testid="stColumn"]:has(.st-key-tb_search), [data-testid="stColumn"]:has(.st-key-tb_order),
+  [data-testid="stColumn"]:has(.st-key-tb_details) {{ display:none !important; }}
+  .st-key-mobilelist {{ display:flex !important; }}
+  .st-key-topbar .st-key-rx_topbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(2) {{
+    flex:1 1 100% !important; }}
+  .st-key-topbar .st-key-rx_topbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:nth-child(n+3) {{
+    flex:1 1 calc(50% - 8px) !important; min-width:0 !important; }}
+  .st-key-nav, .st-key-nav [data-testid="stButtonGroup"], .st-key-nav [role="radiogroup"] {{ width:100% !important; display:flex; }}
   .st-key-nav button {{ flex:1 1 0; }}
-  ol.ra-flow {{ flex-direction:column; gap:20px; }}
-  .ra-flow li:not(:last-child)::after {{ content:"↓"; right:auto; left:20px; top:auto; bottom:-19px; transform:none; }}
+  .ra-summary {{ gap:var(--s1) var(--s3); font-size:0.875rem; }}
+  ol.ra-flow {{ flex-direction:column; gap:var(--s4); }}
+  .ra-flow li:not(:last-child)::after {{ content:"↓"; right:auto; left:20px; top:auto; bottom:-18px; transform:none; }}
 }}
 """
 
-# rows created with streamlit_app.cols(name, ...) reflow by the space they have: (min px per column, grow)
-REFLOW = {"overlays": [140], "decide": [160], "after": [160], "reportbar": [240], "downloads": [220],
-          "charts": [360], "figs": [380], "about": [320], "onboard": [320], "rerunrow": [260],
-          "toolbar": [220, 150, 170, 150], "viewtools": [330, 130], "viewopts": [118, 104, 138, 150], "sim": [170], "policies": [260],
-          "read": [560, 360], "slicenav": [52, 200, 52]}
-REFLOW_GROW = {"read": [1.6, 1.0], "toolbar": [2, 1.4, 1, 0.8], "viewtools": [3, 1], "slicenav": [0, 1, 0]}
+# rows created with streamlit_app.cols(name, ...) reflow by the space they have: min px per column (+ grow)
+REFLOW = {"decide": [150], "after": [150], "reportbar": [240], "downloads": [220], "charts": [360], "figs": [380],
+          "about": [320], "onboard": [320], "rerunrow": [260], "policies": [260], "sim": [170], "authrow": [240],
+          "toolbar": [240, 180, 170, 120], "viewtools": [104, 116, 176, 92], "slicenav": [44, 200, 44],
+          "topbar": [240, 220, 136, 136], "casebar": [340, 470], "casenav": [140, 160, 140], "savebar": [150, 130],
+          "pendingbar": [190], "read62": [540, 340], "read75": [680, 290]}
+REFLOW_GROW = {"toolbar": [2, 1.4, 1, 0.6], "viewtools": [1, 1, 1.2, 0.6], "slicenav": [0, 1, 0],
+               "topbar": [2.4, 1.2, 0.25, 0.25], "casebar": [2.2, 1.3], "casenav": [0, 1, 0], "savebar": [1.3, 1],
+               "read62": [1.65, 1.0], "read75": [3.4, 1.0]}
 
 
 def reflow_css() -> str:

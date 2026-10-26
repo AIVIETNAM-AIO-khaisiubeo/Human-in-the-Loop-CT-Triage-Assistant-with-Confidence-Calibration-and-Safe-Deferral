@@ -229,36 +229,45 @@ def qc_status(record: dict) -> dict:
     """Operational readiness of the AI output - kept separate from any clinical finding or urgency."""
     q = record.get("quality") or {}
     if q.get("passed", True):
-        return {"kind": "ok", "label": "QC passed", "detail": "Automatic checks passed.", "consequence": ""}
+        return {"kind": "ok", "label": "QC passed", "detail": "Automatic checks passed.", "consequence": "",
+                "manual": ""}
     checks = [c for c in q.get("checks", []) if not c.get("passed", True)]
     names = {c.get("name") for c in checks}
     msgs = [c.get("message", "") for c in checks] or list(q.get("failed_reasons", []))
     if names & IMAGE_CHECKS:
         label = "Image QC failed"
         consequence = ("The scan geometry is outside what the AI was built for: AI measurements may be wrong and "
-                       "the AI suggestion is withheld. Check the series, then read the case fully.")
+                       "the AI suggestion is withheld.")
+        manual = ("Check the series first. Review the images manually only if they are of diagnostic quality; "
+                  "otherwise defer and request the correct series.")
     else:
         label = "Segmentation QC failed"
-        consequence = ("The AI segmentation is unreliable, so its tumour map, measurements and suggestion are "
-                       "withheld. Read the case fully; the images themselves are not affected.")
+        consequence = ("The AI segmentation is unreliable, so its masks, measurements and suggestion are withheld. "
+                       "This is a failure of the AI output, not of the CT acquisition.")
+        manual = "The images can be reviewed manually."
     detail = "; ".join(m[:1].upper() + m[1:] for m in msgs if m)
     return {"kind": "image" if label.startswith("Image") else "segmentation", "label": label,
-            "detail": detail, "consequence": consequence}
+            "detail": detail, "consequence": consequence, "manual": manual}
 
 
 def agreement(seg_p: float | None, vlm_p: float | None, score_gap: float = 0.15) -> dict:
     """Class agreement and score agreement are different things - say which one holds."""
     if seg_p is None or vlm_p is None:
-        return {"kind": "none", "text": "No second-reader result for this case."}
+        return {"kind": "none", "text": "No second-reader result for this case.",
+                "interpretation": "Agreement cannot be assessed. A missing result is not a negative result."}
     s_pos, v_pos = seg_p >= 0.5, vlm_p >= 0.5
     flag = lambda pos: "flags a tumour" if pos else "does not flag a tumour"  # noqa: E731
     if s_pos != v_pos:
         return {"kind": "disagree", "text": f"The AI tools disagree: the segmentation model {flag(s_pos)} "
-                                            f"({pct(seg_p)}), the second-reader model {flag(v_pos)} ({pct(vlm_p)})."}
+                                            f"({pct(seg_p)}), the second-reader model {flag(v_pos)} ({pct(vlm_p)}).",
+                "interpretation": "The two models reach different conclusions. Neither is a reference standard - "
+                                  "rely on your own reading of the images."}
     both = "Both AI tools flag a tumour" if s_pos else "Neither AI tool flags a tumour"
     if abs(seg_p - vlm_p) >= score_gap:
-        return {"kind": "differ", "text": f"{both}, but their scores differ: {pct(seg_p)} vs {pct(vlm_p)}."}
-    return {"kind": "agree", "text": f"{both} with similar scores ({pct(seg_p)} and {pct(vlm_p)})."}
+        return {"kind": "differ", "text": f"{both}, but their scores differ: {pct(seg_p)} vs {pct(vlm_p)}.",
+                "interpretation": "Same conclusion with different confidence - treat the probability as less certain."}
+    return {"kind": "agree", "text": f"{both} with similar scores ({pct(seg_p)} and {pct(vlm_p)}).",
+            "interpretation": "Agreement between the models does not guarantee that they are correct."}
 
 
 UNCERTAINTY_DEFINITION = ("Uncertainty is the predictive entropy of the calibrated probability, on a 0-1 scale "
@@ -423,6 +432,83 @@ def humanize(reason: str) -> str:
     r = r.replace("p = ", "probability ").replace("p ", "probability ", 1) if r.startswith("p ") else \
         r.replace("p = ", "probability ")
     return r[:1].upper() + r[1:]
+
+
+# --------------------------------------------------------------------------- persistence: impressions, authorised policies
+def _impressions_path(store: RunStore, reader_id: str) -> Path:
+    return Path(store.p("feedback")) / f"{reader_id}_impressions.jsonl"
+
+
+def save_impression(store: RunStore, reader_id: str, case_id: str, value: int, session_id: str) -> dict:
+    """Independent impressions are written to disk at once, so an interrupted session can resume safely."""
+    from datetime import datetime, timezone
+
+    rec = {"reader_id": reader_id, "case_id": case_id, "value": int(value), "session_id": session_id,
+           "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "at_local": datetime.now().astimezone().strftime("%H:%M")}
+    p = _impressions_path(store, reader_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    return rec
+
+
+def load_impressions(store: RunStore, reader_id: str) -> dict:
+    """First recorded impression per case (the original impression is never replaced)."""
+    p = _impressions_path(store, reader_id)
+    out: dict = {}
+    if p.exists():
+        for line in p.read_text().splitlines():
+            if line.strip():
+                r = json.loads(line)
+                out.setdefault(r["case_id"], r)
+    return out
+
+
+def clear_impressions(store: RunStore, reader_id: str) -> None:
+    p = _impressions_path(store, reader_id)
+    if p.exists():
+        p.unlink()
+
+
+def _authorised_path(store: RunStore) -> Path:
+    return Path(store.p("feedback")) / "authorised_policies.json"
+
+
+def authorised_policy(store: RunStore, cfg: dict, reader_id: str, policy_name: str) -> tuple[ReaderPolicy, dict | None]:
+    """The policy a reading session may use: the last explicitly authorised one, else the universal policy."""
+    p = _authorised_path(store)
+    data = json.loads(p.read_text()) if p.exists() else {}
+    entry = data.get(f"{reader_id}|{policy_name}")
+    if policy_name == "universal" or not entry:
+        pol = universal_policy(cfg)
+        if policy_name != "universal":
+            pol.notes.append("no authorised personalisation yet - universal policy in use")
+        return pol, None
+    d = dict(entry["policy"])
+    d["notes"] = list(d.get("notes", []))
+    return ReaderPolicy(**d), entry
+
+
+def authorise_policy(store: RunStore, reader_id: str, policy_name: str, policy: ReaderPolicy, by: str, reason: str,
+                     session_id: str, previous: str) -> dict:
+    """Record an explicit, attributed authorisation; it takes effect from the next reading session."""
+    from datetime import datetime, timezone
+
+    p = _authorised_path(store)
+    data = json.loads(p.read_text()) if p.exists() else {}
+    entry = {"policy": policy.to_dict(), "version": policy_version(policy), "authorised_by": by, "reason": reason,
+             "authorised_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "session_id": session_id,
+             "previous": previous}
+    data[f"{reader_id}|{policy_name}"] = entry
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=1, default=str))
+    with open(Path(store.p("feedback")) / "policy_changes.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"timestamp": entry["authorised_at"], "reader_id": reader_id, "policy": policy_name,
+                            "from": previous, "to": entry["version"], "threshold_to": policy.threshold,
+                            "withhold_to": policy.defer_uncertainty, "n_decisions": policy.n_feedback,
+                            "authorised_by": by, "reason": reason, "session_id": session_id}) + "\n")
+    return entry
 
 
 def neighbours(order: list[str], case_id: str) -> tuple[str | None, str | None]:

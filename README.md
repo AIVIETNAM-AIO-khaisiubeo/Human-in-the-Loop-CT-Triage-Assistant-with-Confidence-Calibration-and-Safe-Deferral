@@ -40,7 +40,7 @@ independent read for readers (and cases) where its help would do more harm than 
 | | Deterministic, template-based **report draft**; MedGemma's text is quoted verbatim as *unverified* and checked for sizes the measurement tool did not produce | `radagent/report.py`, `radagent/vlm/guard.py` |
 | **Aim 2 - learning from corrections** | Accept / edit / reject feedback log, **per-reader trust curve**, reader-specific threshold and **learning to defer** | `radagent/policy.py`, `radagent/readers/` |
 | **Aim 3 - evaluation** | Simulated readers A (over-reliant), B (sceptical), C (inconsistent); universal vs reader-specific vs deferral policies on the same held-out LiTS cases; RQ1-RQ3 analyses; segmenter vs MedGemma vs fused | `radagent/experiments.py`, `notebooks/evaluation.ipynb` |
-| Reading interface | A reading website built around the radiologist's journey and an external design review: blind first read (no AI output before your own impression), CT-first reading view, separate AI-evidence and decision panels, session-frozen and versioned decision policy, decisions logged with the recommendation on screen; semantic navy / teal / amber / red / slate palette with WCAG AA contrast, 44 px targets, keyboard shortcuts - see [`docs/UX_DESIGN.md`](docs/UX_DESIGN.md) | `app/` |
+| Reading interface | A reading website built around the radiologist's journey and two external design reviews: no sidebar, CT viewer as the main workspace, blind first read (no AI output before your own impression, saved at once), evidence and limitations in reading order, a decision footer that stays visible with explicit save states, unsaved-work guard, session-locked settings, decision policies used only after an attributed authorisation, explicit failure states, separate mobile case cards; semantic navy / teal / amber / red / slate palette with WCAG AA contrast, 44 px targets, keyboard shortcuts - see [`docs/UX_DESIGN.md`](docs/UX_DESIGN.md) | `app/` |
 
 
 
@@ -166,188 +166,50 @@ takes over and the trace says so.
 
 ## 5. Five-minute walkthrough
 
-The website has two working modes - **Worklist** and **Read case** - and a separate **Research and quality**
-area in the sidebar. Design notes, the radiologist journey and the response to the design review:
-[`docs/UX_DESIGN.md`](docs/UX_DESIGN.md).
+There is no sidebar: one compact top bar holds the product and research label, the two working modes -
+**Worklist** and **Read case** - and two menus, **Session** and **Research**. Design notes, the radiologist journey
+and the responses to the design reviews: [`docs/UX_DESIGN.md`](docs/UX_DESIGN.md).
 
-1. **Worklist** - a slim session bar (reader, reading mode, session and model-set ids, research label), a one-line
-   queue summary and a dense table: position, case, *Image / AI QC* (operational), *AI finding*, status and one
-   **Open** action. In the default **blind first read** the cases are in arrival order and the AI finding stays
-   hidden (*Hidden until your impression*); switch *Reading mode* to **AI-assisted triage** in the sidebar to see
-   AI categories, probabilities, tool disagreement and the AI priority order. Use *Show*, *Find case* and
-   *Details* in the toolbar.
-2. **Read case** - previous / next (or **P** / **N**) and a case picker, then three steps:
-   *Independent read → Reveal AI evidence → Reconcile and decide*. The CT viewer opens without AI overlays
-   (orientation markers, slice *n / N*, window/level presets or custom W/L in HU, zoom and pan, overlay
-   opacity, **J** / **K** to step slices). Save your impression; the AI evidence then appears next to it:
-   the calibrated patient-level probability, its uncertainty on a stated scale, whether the two AI tools agree on
-   the class *and* the score, validity (QC), measurements and the lesion table. In **Reconcile and decide** record
-   *Tumour / No tumour / Defer*, optionally modify the AI lesions, and **Save decision**; then **Next unread
-   case** or **Open report**.
-3. **Research and quality** (sidebar):
-   * **Reader adaptation** - the policy active in this session (frozen) next to the policy proposed from the
-     logged decisions; **Apply from the next case** is the only way it changes, and every change is logged.
-     For a simulated reader (Reading as *Reader B*, say), **Simulate N reads** runs an offline simulation.
+1. **Session** (menu) - reader, reading mode (*Blind first read* or *AI-assisted triage*), decision policy and
+   worklist, plus the session, model-set and policy ids (copyable). These settings **lock** after your first saved
+   impression or decision; **Start a new session** unlocks them and loads the latest authorised policy.
+2. **Worklist** - a queue summary that keeps four kinds of status apart (workflow counts, technical QC issues and,
+   in AI-assisted triage only, *urgent by AI rule* and *AI models disagree*), one primary action (**Open next
+   unread case**) and a table. In the default **blind first read** the table has no AI column at all:
+   *# · Case · Image / AI QC · Reading status · Open*, in arrival order; a QC failure says what can still be done
+   (*images can be read manually* / *check the series*). On a phone the list becomes separate case cards
+   (*Case 01*, case id and status, QC, AI visibility, one *Open case* action).
+3. **Read case** - one case bar (case id, status, *CT abdomen · axial · n slices · case k of n*, reading progress,
+   **Previous** / *Go to case* / **Next**, or **P** / **N**). The CT viewer takes about 60 % of the width (*Large
+   image* in the *Image* menu: about 70 %). Its toolbar is grouped: **Image** (window/level presets labelled with
+   their values, e.g. *Liver · W 150 / L 70 HU*, custom W/L, zoom, pan, layout), **Overlays** (AI liver contour, AI
+   lesion contour with optional fill - off by default - and the uncertainty map with opacity), **Original CT
+   (O)** to hide every overlay, and **Reset**. A status line shows the active W/L, zoom and overlays and when a
+   mask is locked, withheld or absent on the slice; **J** / **K** step slices.
+   The side panel scrolls on its own and has three sections: **01 Independent read** (save your impression - it is
+   written to disk at once), **02 Evidence and limitations** in reading order (AI finding → calibrated probability
+   and its target → uncertainty and validity → model agreement and what it means → supporting evidence on demand)
+   and **03 Decision**, a footer that stays visible: final finding, **Save decision**, **Defer…** with a reason,
+   and a save state (*Not saved / Unsaved changes / Saved hh:mm / Save failed*). The saved summary states the case,
+   time, impression → final finding, the relation to the AI and *research decision saved · report draft not
+   signed*; **Revise decision…** records a new decision that names the one it revises.
+   Leaving a case with unsaved work (Next, Go to case, the mode switch, a menu) asks: **Save and continue**,
+   **Discard and continue** or **Stay on this case**. Reopening a case after an interruption resumes with the
+   saved impression.
+4. **Research** (menu):
+   * **Reader adaptation** - the policy active in this session next to the policy proposed from the logged
+     decisions. A proposal is used only after **Authorise for future sessions** (name and role, reason,
+     confirmation); it is versioned, logged and takes effect from the next session. For a simulated reader
+     (Reading as *Reader B*, say), **Simulate N reads** runs an offline simulation that changes nothing.
    * **Model performance** - segmentation model vs second-reader model vs combined, calibration, simulated-reader
      policy comparison and all figures.
-   * **Audit trail** - every decision on the case with the recommendation that was on screen, policy and
-     model-set versions; the agent's tool calls; re-run or recompute from the CT.
-   * **About and intended use** - what it is and is not for, and the supported-device policy.
-
-Turn on *Research mode* in the sidebar to overlay the reference annotation and label each decision as a correct
-acceptance, harmful acceptance, correct or wrong rejection. A link such as `?view=read&case=lits_028` opens a
-case directly.
-
-## 6. Methods
-
-### 6.1 Geometry and measurement (Step 1)
-Every NIfTI is re-ordered to the closest canonical **RAS+** orientation from its affine (LiTS mixes storage
-orders) and shown in the radiological axial view (patient right on the left, anterior up). Voxel spacing is read
-from the header, never assumed. Inference runs at 256 px, the **class probabilities are resized back to the
-original grid** and every volume is `n_voxels × dz × drow × dcol`. Lesions are 3D connected components inside the
-liver that are ≥ `min_lesion_ml` (0.1 ml) and reach a peak tumour probability ≥ 0.7; for each: volume, longest
-axial diameter on its largest cross-section, slice range, mean HU, mean probability.
-
-### 6.2 Two-stage, uncertainty-aware segmentation
-Stage 1: one deterministic pass over all slices locates the liver slab. Stage 2: all stochastic passes on the
-slab only - **flip-TTA × MC-dropout** (2 × 2 = 4 passes by default).
-
-### 6.3 MedGemma 1.5 second reader
-`vlm_second_read` follows the CT recipe of Google's MedGemma notebooks: 16 axial slices spread evenly over the
-**predicted liver extent** (superior → inferior), each converted to an RGB image whose channels are three CT
-windows (−1024…1024, −135…215, 0…80 HU), interleaved with `SLICE n` labels after a radiologist instruction.
-
-* **Score.** For "is there at least one focal liver lesion suspicious for a liver tumour? Answer yes or no" the
-  model generates one token; `P(yes)` = probability mass of the single-token *yes* variants against the *no*
-  variants at that position (the mass on these tokens is stored as a sanity check). A number can be calibrated
-  and fused; free text cannot.
-* **Description.** A second, greedy generation describes the liver and ends with `Final Answer: yes/no`. It is
-  shown and reported **verbatim as unverified model text**; a guard flags sizes that no measured lesion supports
-  and a written conclusion that contradicts the model's own `P(yes)`.
-* **Precision.** bf16 on Ampere or newer GPUs; on a T4 the weights are loaded in 4-bit (NF4) with float32
-  compute, avoiding the float16 overflow of Gemma 3 models.
-* **Caching.** Reads are stored per case with a signature of model, prompt version, slice count and windows, and
-  of the segmentation they were sampled from; the agent reuses them unless asked to recompute.
-
-### 6.4 Case-level score, calibration, uncertainty (Step 2)
-* Segmenter score `p_seg` = mean of the *k* highest (slightly smoothed) tumour probabilities inside the liver,
-  *k* voxels = 0.1 ml - "is there a lesion of at least 0.1 ml the model believes in?".
-* Calibration on the **calibration split only**. Candidates: identity, temperature scaling and Platt scaling of
-  `p_seg`, Platt scaling of MedGemma's `P(yes)`, and a **fused** logistic model on both logits (weak ridge
-  towards equal weights). The winner is selected by stratified 5-fold CV negative log-likelihood, refitted on
-  the whole calibration split and evaluated **once** on the test split (Brier, ECE with equal-width and
-  equal-mass bins, NLL, AUROC, 95 % bootstrap intervals, reliability diagram). Each tool is also calibrated and
-  evaluated on its own for the comparison table.
-* `uncertainty` = predictive entropy (bits) of the calibrated probability. The stochastic segmentation passes
-  give the decomposition *total = expected entropy (aleatoric) + mutual information (epistemic)*; both parts are
-  reported.
-* **Disagreement.** When the calibrated segmenter and MedGemma probabilities fall on different sides of 0.5, the
-  case is flagged: it receives a priority bonus and is never labelled LIKELY NORMAL.
-
-### 6.5 Quality control and triage (Step 3)
-QC checks (liver found, plausible liver volume, spacing, slice count, tumour voxels outside the liver) route a
-case to a manual read. Priority = 0.60 · p + 0.25 · log-volume term + 0.15 · uncertainty (+ 0.10 if the two AI
-tools disagree), categories URGENT / SUSPICIOUS / UNCERTAIN / LIKELY NORMAL / QC FAIL. The report is a fixed
-template filled with these values.
-
-### 6.6 Reader model, feedback and personalisation (Step 4)
-Simulated readers follow a **sequential reading protocol**: independent impression → AI suggestion → final
-decision. Own reads depend on lesion size **and conspicuity** (`P(call) = σ(a + b·log10 V + c·(|Δ| − 20)/10)`,
-Δ = tumour-minus-liver attenuation measured from the LiTS image and its reference mask, so small or faint lesions
-are missed by readers *and* the model); tumour-free cases get a fixed false-positive rate. On disagreement the
-reader switches to the AI with probability `σ(k·(conf − τ))` (*trust curve*); lapses make decisions random; poor
-outlines are edited.
-
-| | own-read sensitivity | false-positive rate | trust curve | lapses | role |
-|---|---|---|---|---|---|
-| Reader A | medium | 12 % | switches easily (τ = 0.55, k = 8) | 2 % | over-reliant |
-| Reader B | conservative (misses small lesions) | 4 % | almost never switches (τ = 0.97) | 2 % | sceptical, rejects many |
-| Reader C | lower | 15 % | flat (k = 1.5) | 15 % | inconsistent |
-
-From a reader's feedback the system fits that reader's **trust curve** (MAP logistic regression with a weak
-prior) and **lapse rate**. Because the independent impressions do not depend on the policy, the expected loss of
-any candidate policy on the reader's past cases follows in closed form:
-
-`loss = 2·FN + 1·FP + 0.02·review actions`   (a missed tumour costs twice a false alarm)
-
-A grid search over the suggestion threshold (0.10-0.90) and the deferral cut-off (uncertainty ≥ 0.3 … never)
-picks the best policy (with a small shrinkage penalty towards the universal threshold). It is adopted only with
-≥ 10 feedback events **and** if its expected improvement exceeds one standard error of the paired per-case
-difference (and a 0.005 floor); otherwise the reader keeps the universal policy - a guard against overfitting
-small feedback logs.
-
-Policies compared: **Reader alone** (control) · **Universal threshold** (0.5) · **Universal + deferral** (one
-deferral rule from pooled feedback) · **Reader-specific threshold** · **Reader-specific + deferral**.
-
-### 6.7 Evaluation protocol (Step 5)
-Burn-in: each reader reads the 26 calibration cases (random order per seed) with the universal policy →
-policies are fitted → every policy is applied to the **same 25 test cases with the same random draws** (common
-random numbers), 30 seeds. Learning curves repeat the fit with the first *n* feedback events.
-
-| Metric | Meaning |
-|---|---|
-| Dice (liver, tumour) | segmentation overlap at original resolution |
-| AUROC / Brier / ECE / NLL | case-level detection and confidence reliability: segmenter, MedGemma, fused; before and after calibration |
-| Sensitivity / specificity | case-level detection (AI alone and final reader decision) |
-| Deferral rate | share of cases where the suggestion was withheld |
-| Harmful-acceptance rate | accepted an incorrect AI suggestion (per case); *over-reliance* = per incorrect suggestion shown |
-| Review actions per case | burden proxy: accept 1, reject 2, edit 3, independent read 4 |
-
-## 7. Results
-
-The earlier synthetic-phantom demo run and its numbers were removed together with the synthetic data. Results on
-LiTS17 come from running section 4.1; every number is then regenerated from the run folder by
-[`notebooks/evaluation.ipynb`](notebooks/evaluation.ipynb) (set `RUN = outputs/lits`), and the figures are written
-to `outputs/lits/figures/`:
-
-| Figure | Question |
-|---|---|
-| `ai_tools.png` | Segmenter vs MedGemma vs the fused score: ROC on the test split, and where the two tools disagree |
-| `segmentation_quality.png` | Liver and tumour Dice per test case |
-| `calibration_reliability.png` | Is the confidence calibrated? |
-| `risk_coverage.png`, `triage_lift.png` | Does uncertainty find the AI's errors; does the worklist surface tumour cases first? |
-| `policy_comparison.png`, `benefit_by_reader.png`, `learning_curve.png` | RQ1-RQ3 with the simulated readers |
-
-With 25 test cases, intervals are wide and LiTS contains few tumour-free volumes, so report the bootstrap intervals
-alongside every point estimate.
-
-## 8. Repository layout, adapters and tests
-
-```
-radagent/
-  agent/         tools.py (tool registry + preconditions, incl. vlm_second_read), planner.py (rule / open-LLM),
-                 runner.py (guarded loop), llm_client.py
-  data/lits.py   kagglehub download, pairing across both Kaggle parts, notebook-compatible split, file relocation
-  models/        torch_models.py (ViT-UNETR 2.5D, UNet25D, MC dropout), base.py (Segmenter interface)
-  vlm/           base.py (VLMReader interface), medgemma.py (MedGemma 1.5 adapter), ct_prep.py (windows, slices),
-                 prompts.py (versioned prompts), guard.py (checks on model text)
-  plugins.py     load any adapter class from "package.module:Class"
-  io/nifti.py    NIfTI-1 I/O (nibabel, chunked float reading, dependency-free fallback)
-  geometry.py    affine -> RAS+ canonical, radiological view, spacing, volumes
-  inference.py   two-stage stochastic inference, post-processing, case score
-  measure.py     original-resolution measurement, reference metrics, viewer arrays
-  calibration.py temperature / Platt / VLM / fused, CV selection, Brier, ECE, reliability, bootstrap
-  confidence.py  calibrated probability + uncertainty + tool disagreement
-  quality.py, triage.py, report.py
-  policy.py      reader policies, trust-curve fit, expected-loss optimisation, deferral
-  readers/       simulated reader profiles, feedback log
-  experiments.py controlled reader experiment, RQ1-RQ3 aggregates
-  plots.py, pipeline.py, cli.py, config.py, store.py
-app/             streamlit_app.py (website, one view per journey stage), ui_theme.py (colour tokens, CSS, accessible
-                 HTML components), ui_core.py (rendering + live adaptation, Streamlit-free)
-docs/            UX_DESIGN.md (radiologist journey, design rules, contrast table)
-configs/         lits.yaml (LiTS17 + ViT-UNETR + MedGemma)
-notebooks/       colab_lits_pipeline.ipynb (full run on Colab), evaluation.ipynb (reproducible evaluation)
-tests/           unit + end-to-end tests, website tests (Streamlit AppTest); fixtures/ = small CTs in the Kaggle
-                 LiTS layout and stand-in models
-```
-
-**Swapping a model.** Both tools are adapter classes behind small interfaces, selected in the config:
-
-```yaml
-segmenter: {backend: plugin, plugin: "my_pkg.my_module:MySegmenter"}   # implements radagent.models.base.Segmenter
-vlm:       {backend: plugin, plugin: "my_pkg.llava_med:LlavaMedReader"} # implements radagent.vlm.base.VLMReader
-```
+   * **Audit trail** - the independent impression, every decision on the case with the recommendation that was on
+     screen, policy and model-set versions, and revisions; the agent's tool calls; re-run or recompute from the CT.
+   * **About and intended use** - what it is and is not for, the supported-device policy and what happens when
+     something fails.
+   * **Show the reference annotation** overlays the dataset's reference and labels each decision as a correct
+     acceptance, harmful acceptance, correct or wrong rejection. A link such as `?view=read&case=lits_028` opens a
+     case directly.
 
 A `VLMReader` receives the list of RGB slices and returns `{"p_yes": float, "text": str}` - for LLaVA-Med that is
 a wrapper around its own generation code. `vlm: {backend: none}` runs the agent without a second reader.
@@ -356,10 +218,12 @@ a wrapper around its own generation code. `vlm: {backend: none}` runs the agent 
 pipeline (manifest → segmenter → MedGemma tool → calibration → agent → reports → reader experiment → figures, and a
 recompute from the CT) with stand-in adapter classes; MedGemma's token scoring, prompt layout and text guard are
 tested with a fake tokenizer. `tests/test_app.py` drives the real website with Streamlit's AppTest and checks the
-safety rules as behaviour: no AI output for unread cases in a blind first read, AI evidence only after a saved
-impression, decisions stored with the recommendation on screen and the session / policy / model versions, a policy
-that changes only when explicitly applied, QC failures that withhold the AI output, *defer* without a final finding;
-plus every view for every reader and the colour palette against WCAG AA.
+safety rules as behaviour: no AI output (and no AI column) for unread cases in a blind first read, AI evidence only
+after a saved impression, impressions persisted and resumed after an interruption, settings locked after the first
+save, the unsaved-work guard (save / discard / stay), revisions that never overwrite, decisions stored with the
+recommendation on screen and the session / policy / model versions, a policy used only after an attributed
+authorisation and only from the next session, explicit failure states (QC, missing images, a failed save), *defer*
+without a final finding; plus every view for every reader, the mobile cards and the colour palette against WCAG AA.
 
 ```bash
 pip install -r requirements-dev.txt && pytest -q
