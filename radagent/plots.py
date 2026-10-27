@@ -296,19 +296,19 @@ def _roc(score: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.r_[0, fp / max(1, (1 - y).sum())], np.r_[0, tp / max(1, y.sum())]
 
 
-SEG_NAMES = {"vitunetr": "ViT-UNETR 2.5D", "unet25d": "2.5D U-Net"}
+SEG_NAMES = {"vista3d": "NVIDIA VISTA3D"}
 
 
 def tool_names(cfg: dict) -> tuple[str, str]:
     seg = cfg["segmenter"]["backend"]
     vlm = cfg.get("vlm", {})
-    vname = "MedGemma 1.5" if vlm.get("backend") == "medgemma" else str(vlm.get("plugin") or vlm.get("backend"))
+    vname = str(vlm.get("plugin") or vlm.get("backend") or "none")
     return SEG_NAMES.get(seg, str(cfg["segmenter"].get("plugin") or seg).split(":")[-1]), vname.split(":")[-1]
 
 
 def ai_tools_figure(records: list[dict], path: Path, metrics: dict | None = None,
-                    names: tuple[str, str] = ("ViT-UNETR 2.5D", "MedGemma 1.5")) -> str | None:
-    """Segmenter vs MedGemma vs the score the agent used, on the test split."""
+                    names: tuple[str, str] = ("NVIDIA VISTA3D", "second reader")) -> str | None:
+    """Segmenter vs an optional second reader vs the score the agent used, on the test split."""
     style()
     recs = [r for r in records if r.get("split") == "test" and "reference" in r
             and r["confidence"].get("vlm_probability_raw") is not None]
@@ -323,7 +323,7 @@ def ai_tools_figure(records: list[dict], path: Path, metrics: dict | None = None
     tools = (metrics or {}).get("tools_test", {})
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.4, 4.3))
     a1.plot([0, 1], [0, 1], color=MUTED, lw=1.2)
-    for (name, score, key), col in zip(((f"Segmenter: {names[0]}", seg, "segmenter"), (names[1], vlm, "medgemma"),
+    for (name, score, key), col in zip(((f"Segmenter: {names[0]}", seg, "segmenter"), (names[1], vlm, "second_reader"),
                                         ("Used by the agent", used, None)), (SERIES[0], SERIES[1], INK)):
         fx, ty = _roc(score, y)
         auc = tools.get(key, {}).get("auroc") if key else None

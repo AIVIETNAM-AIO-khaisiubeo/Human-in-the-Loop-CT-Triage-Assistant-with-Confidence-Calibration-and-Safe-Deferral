@@ -2,7 +2,7 @@
 
 priority = w_p * p_cal + w_v * volume_term + w_u * uncertainty,   volume_term = log1p(ml) / log1p(ref)
 (clipped to [0, 1]). Uncertain cases are pulled *up* the list on purpose: they are the
-ones that most need a careful human read. When the two AI tools (segmenter and MedGemma)
+ones that most need a careful human read. When the two AI tools (segmenter and an optional second reader)
 disagree, the case gets a priority bonus and is never labelled LIKELY NORMAL. Cases that
 failed QC are placed near the top as well because they cannot be pre-read by the AI at all.
 """
@@ -15,7 +15,7 @@ CATEGORY_HELP = {
     "QC FAIL": "Automatic quality control failed - full manual read required.",
     "URGENT": "High-confidence tumour finding with a sizeable lesion.",
     "SUSPICIOUS": "Tumour suspected by the AI.",
-    "UNCERTAIN": "AI is uncertain, or the segmenter and MedGemma disagree - read carefully.",
+    "UNCERTAIN": "AI is uncertain, or two AI tools disagree - read carefully.",
     "LIKELY NORMAL": "No tumour suspected by the AI.",
 }
 
@@ -49,12 +49,12 @@ def triage(conf: dict, meas: dict, qc: dict, cfg: dict, threshold: float | None 
         reasons.append(f"uncertainty {u:.2f} >= {t['uncertain_flag']}")
     elif disagree:
         cat = "UNCERTAIN"
-        reasons.append("segmenter and MedGemma disagree")
+        reasons.append("segmenter and second reader disagree")
     else:
         cat = "LIKELY NORMAL"
         reasons.append(f"p = {p:.2f} < {thr:.2f}, uncertainty {u:.2f}")
     if disagree and cat not in ("UNCERTAIN", "QC FAIL"):
-        reasons.append(f"segmenter ({conf.get('segmenter_probability', 0):.2f}) and MedGemma "
+        reasons.append(f"segmenter ({conf.get('segmenter_probability', 0):.2f}) and second reader "
                        f"({conf.get('vlm_probability', 0):.2f}) disagree")
     return {"priority": round(float(min(1.0, priority)), 4), "category": cat, "threshold": thr,
             "reasons": reasons, "components": {"probability": round(p, 4), "volume_term": round(vterm, 4),

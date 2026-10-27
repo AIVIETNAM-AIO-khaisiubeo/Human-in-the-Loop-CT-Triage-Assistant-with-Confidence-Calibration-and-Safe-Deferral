@@ -1,7 +1,8 @@
 """End-to-end pipeline steps (each step is also a CLI sub-command).
 
-download -> data -> train -> infer (segmenter) -> vlm (MedGemma) -> calibrate -> first-read
--> simulate -> figures. ``all`` runs them in order; every step caches its results.
+download -> data -> model (fetch the pretrained VISTA3D weights, write the model card) -> infer
+(segment + measure) -> [vlm: optional second reader, off by default] -> calibrate -> first-read
+-> simulate -> figures. ``all`` runs them in order; every step caches its results. Nothing is trained.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ def _store(cfg) -> RunStore:
 
 
 def release_models(kind: str | None = None) -> None:
-    """Free cached models (e.g. the segmenter before MedGemma is loaded on the same GPU)."""
+    """Free cached models (e.g. the segmenter before a second reader is loaded on the same GPU)."""
     for k in [k for k in _MODELS if kind is None or k[0] == kind]:
         del _MODELS[k]
     gc.collect()
@@ -103,15 +104,38 @@ def step_data(cfg: dict) -> pd.DataFrame:
     st.save_manifest(df)
     save_config(cfg, st.p("config_used.yaml"))
     print(f"[data] {len(df)} LiTS cases -> {st.manifest_path} | " +
-          ", ".join(f"{k}: {v}" for k, v in df["split"].value_counts().reindex(["train", "val", "calib", "test"]).fillna(0).astype(int).items()))
+          ", ".join(f"{k}: {v}" for k, v in df["split"].value_counts().reindex(["calib", "test"]).fillna(0).astype(int).items()))
     return df
 
 
-def step_train(cfg: dict) -> dict:
-    from radagent.train import train
+def step_model(cfg: dict) -> dict:
+    """Fetch the pretrained segmenter (nothing is trained) and record what it is in the run's model card."""
+    from radagent.models import model_card_path
 
-    st = _store(cfg)
-    return train(cfg, st.manifest())
+    sc = cfg["segmenter"]
+    if sc["backend"] == "vista3d":
+        from radagent.models.vista3d import HF_FILE, HF_REPO, LABEL_LIVER, LABEL_TUMOUR, LICENSE, weights_path
+
+        path = weights_path(cfg)
+        card = {"backend": "vista3d", "name": "NVIDIA VISTA3D", "trained_here": False,
+                "source": f"https://huggingface.co/{sc.get('hf_repo', HF_REPO)}", "file": sc.get("hf_file", HF_FILE),
+                "revision": sc.get("hf_revision") or "main", "weights_path": str(path), "license": LICENSE,
+                "reference": "He et al., VISTA3D: A Unified Segmentation Foundation Model For 3D Medical Imaging, "
+                             "CVPR 2025 (arXiv:2406.05285)",
+                "label_prompts": {"liver": LABEL_LIVER, "hepatic tumour": LABEL_TUMOUR},
+                "preprocessing": f"RAS, {sc.get('resample_mm', 1.5)} mm isotropic, HU [-963.8, 1053.7] -> [0, 1], "
+                                 f"sliding window {sc.get('roi_size', [128, 128, 128])}",
+                "training_data_overlap": "VISTA3D was trained on 11,454 CTs from 15 sources, including MSD Task 03 "
+                                         "(Liver), which is built from the LiTS training volumes - the cases used "
+                                         "here. Metrics on LiTS are therefore optimistic and are not a held-out "
+                                         "evaluation of the segmenter."}
+        print(f"[model] VISTA3D weights: {path}")
+    else:
+        card = {"backend": sc["backend"], "plugin": sc.get("plugin"), "trained_here": False}
+    p = model_card_path(cfg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    dump_json(card, p)
+    return card
 
 
 # --------------------------------------------------------------------------- perception
@@ -136,14 +160,14 @@ def step_infer(cfg: dict, force: bool = False) -> None:
 
 
 def step_vlm(cfg: dict, force: bool = False) -> None:
-    """MedGemma second read on the evaluation splits (needs the segmenter results and a GPU)."""
+    """Optional second reader on the evaluation splits (off by default: the project uses one model)."""
     if not vlm_enabled(cfg):
-        print("[vlm] vlm.backend is none - skipping")
+        print("[vlm] no second reader configured (vlm.backend: none) - skipping")
         return
     release_models("seg")
     reader = _vlm_loader(cfg)()
     if hasattr(reader, "_load"):
-        reader._load()  # fail early and clearly (no GPU / no Hugging Face access)
+        reader._load()  # fail early and clearly
     t0 = time.time()
     ctxs = list(_contexts(cfg, cfg["inference"]["eval_splits"]))
     n_err = 0
@@ -213,7 +237,7 @@ def step_calibrate(cfg: dict) -> dict:
         if ok_c.sum() >= 4 and ok_t.sum() >= 2 and len(np.unique(y_cal[ok_c])) == 2:
             vl = _fit("vlm", p_cal, v_cal, y_cal)
             fu = _fit("fused", p_cal, v_cal, y_cal)
-            comp["medgemma"] = calibration_report(vl.vlm_only(v_test[ok_t]), y_test[ok_t], nb, n_boot=300, seed=cfg["seed"])
+            comp["second_reader"] = calibration_report(vl.vlm_only(v_test[ok_t]), y_test[ok_t], nb, n_boot=300, seed=cfg["seed"])
             comp["fused"] = calibration_report(fu(p_test, v_test), y_test, nb, n_boot=300, seed=cfg["seed"])
         out["tools_test"] = comp
     dump_json(cal.to_dict(), st.calibrator_path())
@@ -261,7 +285,8 @@ def step_first_read(cfg: dict, planner_name: str | None = None) -> list[dict]:
         st.report_path(r["case_id"]).write_text(draft_report(r))
     cats = pd.Series([r["triage"]["category"] for r in records if r["split"] == "test"]).value_counts().to_dict()
     n_v = sum(1 for r in records if (r.get("vlm") or {}).get("status") == "ok")
-    print(f"[first-read] {len(records)} case records written ({n_v} with a MedGemma read) | test-split triage: {cats}")
+    extra = f" ({n_v} with a second read)" if vlm_enabled(cfg) else ""
+    print(f"[first-read] {len(records)} case records written{extra} | test-split triage: {cats}")
     return records
 
 
@@ -269,11 +294,12 @@ def run_single_case(cfg: dict, case_id: str, planner_name: str = "rule", reader_
                     recompute: bool = False) -> tuple[dict, dict]:
     """Run the agent on one case.
 
-    Default: reuse cached perception (fast, no GPU). ``recompute=True`` re-runs the segmenter and
-    MedGemma on the CT file, updates the case's stored analysis, viewer images, record and report.
+    Default: reuse cached perception (fast, no GPU). ``recompute=True`` re-runs the segmenter (and a
+    second reader, if one is configured) on the CT file, updates the case's stored analysis, viewer
+    images, record and report.
     """
     cfg2 = {**cfg, "agent": {**cfg["agent"], "planner": planner_name}}
-    ctx = next(_contexts(cfg2, ["train", "val", "calib", "test"], [case_id]))
+    ctx = next(_contexts(cfg2, ["calib", "test"], [case_id]))
     ctx.reader_policy = reader_policy
     ctx.persist = save or recompute
     if recompute:
@@ -329,12 +355,7 @@ def step_figures(cfg: dict) -> list[str]:
 def step_all(cfg: dict) -> None:
     t0 = time.time()
     step_data(cfg)
-    from radagent.models import checkpoint_path
-
-    if not checkpoint_path(cfg).exists():
-        step_train(cfg)
-    else:
-        print(f"[train] found {checkpoint_path(cfg)} - skipping training (delete it to retrain)")
+    step_model(cfg)
     step_infer(cfg)
     step_vlm(cfg)
     release_models()
@@ -346,5 +367,5 @@ def step_all(cfg: dict) -> None:
     print(f"[all] open the app:  python -m streamlit run app/streamlit_app.py -- --run {run_dir(cfg)}")
 
 
-__all__ = ["step_download", "step_data", "step_train", "step_infer", "step_vlm", "step_calibrate", "step_first_read",
+__all__ = ["step_download", "step_data", "step_model", "step_infer", "step_vlm", "step_calibrate", "step_first_read",
            "step_simulate", "step_figures", "step_all", "run_single_case", "release_models", "load_json"]

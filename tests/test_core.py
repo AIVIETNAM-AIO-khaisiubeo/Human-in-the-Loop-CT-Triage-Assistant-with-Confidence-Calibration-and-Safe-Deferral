@@ -185,14 +185,14 @@ def test_simulated_reader_behaviour():
 def _record():
     return {"case_id": "lits_028", "split": "test", "source": "LiTS17",
             "geometry": {"shape_on_disk": [512, 512, 120], "spacing_mm": [2.5, 0.78, 0.78], "orientation_on_disk": ["L", "P", "S"]},
-            "model": {"backend": "vitunetr", "version": "2.5D", "passes": 3},
+            "model": {"backend": "vista3d", "version": "VISTA3D 1.0", "passes": 2},
             "measurements": {"liver_found": True, "liver_volume_ml": 1500.0, "liver_mean_hu": 60.0,
                              "predicted_tumour_volume_ml": 6.2, "tumour_burden_pct": 0.41, "n_lesions": 1,
                              "largest_lesion_diameter_mm": 24.0, "liver_slice_range": [30, 90],
                              "lesions": [{"id": 1, "volume_ml": 6.2, "max_axial_diameter_mm": 24.0, "slice_range": [60, 68],
                                           "key_slice": 64, "mean_hu": 30.0, "mean_probability": 0.8}]},
             "vlm": {"status": "ok", "source": "cache", "p_yes": 0.83,
-                    "model": {"backend": "medgemma", "model_id": "google/medgemma-1.5-4b-it", "precision": "bf16"},
+                    "model": {"backend": "plugin", "model_id": "example-vlm (research plugin)", "precision": "bf16"},
                     "text": "A hypodense lesion in the right lobe, about 4 cm. Final Answer: yes",
                     "guard": {"final_answer": 1, "unverified_sizes": ["4 cm"],
                               "notes": ["mentions sizes that the measurement tool did not produce: 4 cm"]}},
@@ -214,7 +214,7 @@ def test_triage_and_report_are_deterministic():
     rank_worklist([rec])
     a, b = draft_report(rec), draft_report(rec)
     assert a == b and "RESEARCH PREDICTION" in a and "6.2 ml" in a and "Pending" in a
-    assert "medgemma-1.5-4b-it" in a and "4 cm" in a and "unverified" in a.lower()
+    assert "example-vlm" in a and "4 cm" in a and "unverified" in a.lower()
     rv = draft_report(rec, review={"reader_id": "live", "action": "reject", "final_label": 0, "initial_read": 0,
                                    "timestamp": "2026-10-25T10:00:00"})
     assert "rejected the AI suggestion" in rv and "no liver tumour" in rv

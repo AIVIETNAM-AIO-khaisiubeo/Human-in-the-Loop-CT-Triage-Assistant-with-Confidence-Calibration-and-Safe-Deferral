@@ -294,9 +294,11 @@ def model_version(cfg: dict, calibration: dict | None, model_card: dict | None) 
     seg = cfg["segmenter"]
     vlm = cfg.get("vlm", {})
     cal = (calibration or {}).get("calibrator", {})
-    parts = {"segmenter": seg.get("plugin") or seg["backend"], "segmenter_card": (model_card or {}).get("checkpoint"),
-             "img_size": cfg["preprocess"]["img_size"], "vlm": vlm.get("model_id") if vlm.get("backend") == "medgemma"
-             else vlm.get("plugin") or vlm.get("backend"), "vlm_slices": vlm.get("n_slices"),
+    parts = {"segmenter": seg.get("plugin") or seg["backend"],
+             "weights": (model_card or {}).get("source"), "revision": (model_card or {}).get("revision"),
+             "img_size": cfg["preprocess"]["img_size"],
+             "vlm": (vlm.get("plugin") or vlm.get("backend")) if vlm.get("backend") not in (None, "none") else None,
+             "vlm_slices": vlm.get("n_slices") if vlm.get("backend") not in (None, "none") else None,
              "calibration": {k: cal.get(k) for k in ("method", "T", "a", "b", "va", "vb", "w")}}
     return {"id": "M-" + short_hash(parts), "parts": parts}
 
@@ -342,7 +344,7 @@ def worklist(records: dict, cases: dict, policy: ReaderPolicy, cfg: dict, review
         rows.append({"case_id": cid, "priority": t["priority"], "category": shown_cat,
                      "arrival": int(cases.get(cid, {}).get("number", 0) or _case_number(cid)),
                      "qc_kind": qc["kind"], "qc_label": qc["label"], "qc_detail": qc["detail"],
-                     "medgemma": float(vp) if vp is not None else float("nan"),
+                     "second_reader": float(vp) if vp is not None else float("nan"),
                      "agree": agreement(c.get("segmenter_probability"), vp)["kind"],
                      "reasons": "; ".join(humanize(x) for x in reasons),
                      "unc_level": uncertainty_level(float(c["uncertainty"])),

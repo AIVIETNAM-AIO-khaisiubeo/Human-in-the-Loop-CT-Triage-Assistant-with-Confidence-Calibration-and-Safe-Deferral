@@ -26,62 +26,46 @@ DEFAULTS: dict[str, Any] = {
         "kaggle_datasets": ["andrewmvd/liver-tumor-segmentation",          # masks + volume_pt1..pt5
                             "andrewmvd/liver-tumor-segmentation-part-2"],  # remaining volumes
         "max_cases": None,                 # optional cap: proportional subset of every split
-        "split_strategy": "notebook_compatible",  # notebook_compatible | random
-        "split_fractions": {"train": 0.40, "val": 0.07, "calib": 0.265, "test": 0.265},
-        # notebook_compatible: reproduce the ViT-UNETR notebook split so that a
-        # warm start from that checkpoint never sees a calibration/test case.
-        "notebook_seed": 42,
-        "notebook_n_train": 80,
-        "notebook_val_frac": 0.15,
-        "calib_fraction_of_heldout": 0.5,
+        # Nothing is trained in this project, so every case is either used to calibrate the
+        # model's case score or to evaluate it.
+        "split_fractions": {"calib": 0.5, "test": 0.5},
     },
     # ------------------------------------------------------------ preprocess
     "preprocess": {
-        "hu_window": [-100, 250],          # soft-tissue / liver window (HU)
-        "img_size": 256,                   # in-plane size seen by the segmenter (LiTS slices are 512)
-        "margin_slices": 15,               # slices kept around the liver for training
+        "hu_window": [-100, 250],          # soft-tissue / liver window (HU) for the viewer and 2.5D plugins
+        "img_size": 256,                   # in-plane size of the stored model-resolution maps (LiTS slices are 512)
     },
     # ------------------------------------------------------------- segmenter
     "segmenter": {
-        "backend": "vitunetr",            # vitunetr | unet25d | plugin
+        # vista3d: NVIDIA VISTA3D (MONAI), pretrained, loaded from Hugging Face - nothing is trained here
+        "backend": "vista3d",             # vista3d | plugin
         "plugin": None,                    # backend: plugin -> "package.module:ClassName" (see radagent/models/__init__.py)
-        "checkpoint": None,                # default: <run>/model/<backend>.pt
-        "init_from": None,                 # warm start, e.g. the 2-class ViT-UNETR .pt from the liver notebook
-        "vit_name": "vit_small_patch16_224.augreg_in21k_ft_in1k",
-        "pretrained": True,                # ImageNet weights for the ViT encoder
-        "decoder_dropout": 0.1,            # enables MC-dropout uncertainty
-        "unet_base": 16,
-        "epochs": 30,
-        "batch_size": 16,
-        "lr_encoder": 1.0e-4,
-        "lr_decoder": 5.0e-4,
-        "weight_decay": 1.0e-2,
-        "grad_clip": 1.0,
-        "num_workers": 2,
-        "class_weights": [1.0, 1.0, 3.0],  # background, liver, tumour (CE term)
-        "tumour_oversample": 3.0,          # sampling weight of slices with tumour
+        "hf_repo": "MONAI/VISTA3D-HF",
+        "hf_file": "vista3d_pretrained_model/model.safetensors",
+        "hf_revision": None,               # pin a commit for exact reproducibility
+        "weights": None,                   # or a local path to model.safetensors (offline machines)
+        "resample_mm": 1.5,                # VISTA3D works on 1.5 mm isotropic voxels
+        "roi_size": [128, 128, 128],       # sliding-window patch
+        "overlap": 0.25,
+        "sw_batch_size": 1,
+        "amp": True,                       # mixed precision on GPU
         "device": "auto",
     },
     # ------------------------------------------------------- vision-language
+    # Optional second reader. Off: the project uses one pretrained model (VISTA3D). The hook is kept
+    # for research (``backend: plugin``) and is exercised by the automated tests.
     "vlm": {
-        "backend": "medgemma",            # medgemma | none | plugin
+        "backend": "none",                # none | plugin
         "plugin": None,                    # backend: plugin -> "package.module:ClassName"
-        "model_id": "google/medgemma-1.5-4b-it",
-        "device": "auto",
-        "dtype": "auto",                   # auto: bf16 on Ampere+ GPUs, else 4-bit weights + fp32 compute
         "n_slices": 16,                    # axial slices sampled uniformly through the predicted liver
-        # MedGemma 1.5 was trained on CT slices with three windows in the RGB channels
-        # (Google's high_dimensional_ct_hugging_face notebook): wide, soft tissue, brain.
-        "windows": [[-1024, 1024], [-135, 215], [0, 80]],
-        "describe": True,                  # also generate a short free-text read (shown as unverified)
-        "max_new_tokens": 320,
+        "windows": [[-1024, 1024], [-135, 215], [0, 80]],   # RGB channels: wide, soft tissue, narrow
+        "describe": True,                  # also ask for a short free-text read (shown as unverified)
         "thumb_size": 160,                 # thumbnails of the slices it saw, for the website
     },
     # ------------------------------------------------------------- inference
     "inference": {
-        "tta_flip": True,
-        "mc_samples": 2,                   # stochastic passes per TTA view (torch)
-        "batch_size": 32,
+        "tta_flip": True,                  # second pass on the left-right flipped CT (uncertainty)
+        "batch_size": 32,                  # slices per batch for 2.5D plugins
         "min_lesion_ml": 0.1,              # smallest lesion reported / looked for by the case score
         "min_lesion_peak_prob": 0.7,       # a lesion candidate must reach this tumour probability somewhere
         "viewer_size": 192,                # stored slice size for the website
@@ -90,8 +74,8 @@ DEFAULTS: dict[str, Any] = {
     },
     # ------------------------------------------------------------ confidence
     "confidence": {
-        # auto: cross-validated choice on the calib split between identity, temperature,
-        # Platt (segmenter score only), vlm (MedGemma only) and fused (both, logistic).
+        # auto: cross-validated choice on the calib split between identity, temperature and
+        # Platt scaling of the segmenter score (plus vlm / fused when a second reader is enabled).
         "method": "auto",
         "n_bins": 10,
         "target_min_tumour_ml": 0.0,       # reference "tumour present" if volume > this
@@ -112,7 +96,7 @@ DEFAULTS: dict[str, Any] = {
         "urgent_diameter_mm": 20.0,
         "uncertain_flag": 0.85,            # bits of predictive entropy (p between ~0.28 and ~0.72)
         "volume_ref_ml": 50.0,
-        "disagreement_bonus": 0.10,        # priority added when segmenter and MedGemma disagree
+        "disagreement_bonus": 0.10,        # priority added when the segmenter and a second reader disagree
         "weights": {"probability": 0.60, "volume": 0.25, "uncertainty": 0.15},
     },
     # ---------------------------------------------------------------- policy

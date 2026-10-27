@@ -165,13 +165,13 @@ st_testing = pytest.importorskip("streamlit.testing.v1")
 @pytest.fixture(scope="module")
 def run_dir(tmp_path_factory):
     from radagent import pipeline as P
-    from tests.test_lits_medgemma import _e2e_cfg
+    from tests.test_lits_pipeline import _e2e_cfg
 
     cfg = _e2e_cfg(tmp_path_factory.mktemp("apprun"))
     cwd = os.getcwd()
     os.chdir(ROOT)
     try:
-        for step in (P.step_data, P.step_train, P.step_infer, P.step_vlm, P.step_calibrate):
+        for step in (P.step_data, P.step_model, P.step_infer, P.step_vlm, P.step_calibrate):
             step(cfg)
         P.step_first_read(cfg, "rule")
         P.step_simulate(cfg, 2)
@@ -480,6 +480,49 @@ def test_worklist_and_viewer_controls(app, run_dir):
     app.button(key="reset_view").click().run()
     assert not app.exception and app.session_state["window"] == "liver" and app.session_state["zoom"] == 1.0
     assert app.session_state["layout"] == "large"                          # layout is a session preference
+
+
+@pytest.fixture(scope="module")
+def single_model_run(tmp_path_factory):
+    """The project's default set-up: one segmentation model and no second reader."""
+    from radagent import pipeline as P
+    from tests.test_lits_pipeline import _e2e_cfg
+
+    cfg = _e2e_cfg(tmp_path_factory.mktemp("onemodel"))
+    cfg["vlm"]["backend"] = "none"
+    cwd = os.getcwd()
+    os.chdir(ROOT)
+    try:
+        for step in (P.step_data, P.step_model, P.step_infer, P.step_vlm, P.step_calibrate):
+            step(cfg)
+        P.step_first_read(cfg, "rule")
+    finally:
+        P.release_models()
+        os.chdir(cwd)
+    return Path(cfg["output_root"]) / cfg["run_name"]
+
+
+def test_one_model_shows_no_second_reader_evidence(single_model_run, monkeypatch):
+    monkeypatch.setenv("RA_RUN", str(single_model_run))
+    monkeypatch.chdir(ROOT)
+    at = _new_app(single_model_run)
+    recs = _records(single_model_run)
+    cid = next(c for c in _order(at) if recs[c]["quality"]["passed"])
+    at.button(key=f"open_{cid}").click().run()
+    assert "agreement between the two AI models" not in _md(at)
+    _impression(at, cid)
+    md = _md(at)
+    assert 'class="ra-ev"' in md and "Model agreement" not in md and "AI models disagree" not in md
+    assert not [e for e in at.expander if "Second-reader" in e.label]
+    assert "pretrained, not trained in this project" in md
+    at.radio(key="reading_mode")  # exists; settings are locked after the impression
+    at.button(key="new_session").click().run()
+    at.radio(key="reading_mode").set_value("assisted").run()
+    at.segmented_control(key="nav").set_value("worklist").run()
+    summary = next(m.value for m in at.markdown if 'class="ra-summary"' in m.value)
+    assert "urgent by AI rule" in summary and "disagree" not in summary
+    at.button(key="go_about").click().run()
+    assert not at.exception and "Second-reader model" not in _md(at)
 
 
 def test_onboarding_without_runs(tmp_path, monkeypatch):

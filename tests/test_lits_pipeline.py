@@ -1,7 +1,9 @@
-"""Tests for the LiTS17 data layer, the MedGemma second-reader tool and the fused calibration.
+"""Tests for the LiTS17 data layer, the VISTA3D adapter, the optional second-reader hook and calibration.
 
-None of these need a GPU, PyTorch, nibabel or a Hugging Face download: the LiTS files are small
-phantoms written in the Kaggle layout and the models are the stand-in plugins in tests/fixtures.
+None of these need a GPU or a download: the LiTS files are small phantoms written in the Kaggle
+layout, the pipeline runs with the stand-in plugins in tests/fixtures, and the VISTA3D adapter is
+checked with a stand-in network (geometry, class assembly, flip test-time augmentation). The real
+VISTA3D weights are exercised by the Colab notebook.
 
 Run:  pytest -q
 """
@@ -13,28 +15,26 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from radagent.calibration import Calibrator, fit_calibrator, nll, sigmoid  # noqa: E402
 from radagent.config import load_config  # noqa: E402
-from radagent.data.lits import (build_manifest, case_number, discover_pairs, locate,  # noqa: E402
-                                notebook_compatible_split)
+from radagent.data.lits import build_manifest, case_number, discover_pairs, locate, random_split  # noqa: E402
 from radagent.io.nifti import _to_compact  # noqa: E402
 from radagent.vlm.ct_prep import liver_z_range, select_slices, window_rgb  # noqa: E402
 from radagent.vlm.guard import check_text, parse_final_answer, unverified_measurements  # noqa: E402
-from radagent.vlm.medgemma import single_token_ids, yes_probability  # noqa: E402
-from radagent.vlm.prompts import build_content  # noqa: E402
 from tests.fixtures.phantoms import write_lits_like  # noqa: E402
 
 
 # --------------------------------------------------------------------------- LiTS data layer
-def test_notebook_compatible_split_matches_the_vitunetr_notebook():
-    split = notebook_compatible_split(list(range(131)))
+def test_split_has_no_training_cases():
+    split = random_split(list(range(131)), {"calib": 0.5, "test": 0.5})
     counts = {k: sum(v == k for v in split.values()) for k in ("train", "val", "calib", "test")}
-    assert counts == {"train": 68, "val": 12, "calib": 26, "test": 25}
-    assert split == notebook_compatible_split(list(range(131)))       # deterministic
+    assert counts == {"train": 0, "val": 0, "calib": 65, "test": 66}  # nothing is trained in this project
+    assert split == random_split(list(range(131)), {"calib": 0.5, "test": 0.5})      # deterministic
 
 
 def test_kaggle_layout_discovery_manifest_and_locate(tmp_path):
@@ -47,11 +47,10 @@ def test_kaggle_layout_discovery_manifest_and_locate(tmp_path):
     assert {Path(ct).parent.parent.name for ct, _ in pairs.values()} == {"part1", "part2"}
 
     cfg = load_config(None)
-    cfg["data"].update({"lits_dirs": [str(root)], "split_strategy": "random",
-                        "split_fractions": {"train": 0.34, "val": 0.16, "calib": 0.25, "test": 0.25}})
+    cfg["data"].update({"lits_dirs": [str(root)]})
     man = build_manifest(cfg, allow_download=False)
     assert list(man["case_id"]) == [f"lits_{i:03d}" for i in range(6)]
-    assert set(man["split"]) <= {"train", "val", "calib", "test"} and (man["split"] == "test").any()
+    assert set(man["split"]) == {"calib", "test"}
     assert all(Path(p).exists() for p in man["ct_path"])
 
     # a run made elsewhere (e.g. on Colab) points at a path that does not exist here
@@ -68,7 +67,7 @@ def test_float_ct_is_stored_compactly():
     assert _to_compact(frac, (1, 2)).dtype == np.float32
 
 
-# --------------------------------------------------------------------------- MedGemma tool pieces
+# --------------------------------------------------------------------------- second-reader hook pieces
 def test_ct_window_rgb_and_slice_selection():
     hu = np.array([[-2000, -135, 40, 215, 3000]], dtype=np.int16)
     rgb = window_rgb(hu, [[-1024, 1024], [-135, 215], [0, 80]])
@@ -80,32 +79,6 @@ def test_ct_window_rgb_and_slice_selection():
     assert select_slices(5, 7, 16) == [7, 6, 5]
     assert liver_z_range({"measurements": {"liver_slice_range": [3, 40]}}) == (3, 40)
     assert liver_z_range({"measurements": {}, "segmentation": {"found_liver": False}}) is None
-
-
-def test_prompt_layout_follows_the_ct_recipe():
-    items = [{"type": "image", "image": f"img{i}"} for i in range(3)]
-    c = build_content(3, "Q?", items)
-    assert c[0]["type"] == "text" and "3 axial CT slices" in c[0]["text"]
-    assert [x.get("text") for x in c[2:7:2]] == ["SLICE 1", "SLICE 2", "SLICE 3"]
-    assert c[-1]["text"] == "Q?" and sum(x["type"] == "image" for x in c) == 3
-
-
-def test_yes_probability_from_first_token_logits():
-    logits = np.full(50, -5.0)
-    logits[[3, 4]] = [2.0, 1.0]           # yes variants
-    logits[[7]] = [0.5]                    # no
-    p, mass = yes_probability(logits, [3, 4], [7])
-    expect = (math.exp(2) + math.exp(1)) / (math.exp(2) + math.exp(1) + math.exp(0.5))
-    assert math.isclose(p, expect, rel_tol=1e-9) and 0.5 < mass < 1.0
-
-    class Tok:                             # 'yes'/'no' single tokens, ' yes' splits in two
-        vocab = {"yes": 11, "Yes": 12, "no": 21, "No": 22, "YES": 13, "NO": 23}
-
-        def encode(self, s, add_special_tokens=False):
-            return [self.vocab[s]] if s in self.vocab else [99, 100]
-
-    assert single_token_ids(Tok(), ["yes"]) == [11, 12, 13]
-    assert single_token_ids(Tok(), ["no"]) == [21, 22, 23]
 
 
 def test_guard_flags_sizes_the_measurement_tool_did_not_produce():
@@ -143,8 +116,7 @@ def _e2e_cfg(tmp_path):
     root = write_lits_like(tmp_path / "lits", n_cases=12, size=112, seed=11)   # both classes in calib
     cfg = load_config(None)
     cfg["run_name"], cfg["output_root"] = "e2e", str(tmp_path / "outputs")
-    cfg["data"].update({"lits_dirs": [str(root)], "split_strategy": "random",
-                        "split_fractions": {"train": 0.17, "val": 0.08, "calib": 0.42, "test": 0.33}})
+    cfg["data"].update({"lits_dirs": [str(root)], "split_fractions": {"calib": 0.42, "test": 0.58}})
     cfg["preprocess"]["img_size"] = 112
     cfg["segmenter"].update({"backend": "plugin", "plugin": "tests.fixtures.stubs:ThresholdSegmenter"})
     cfg["vlm"].update({"backend": "plugin", "plugin": "tests.fixtures.stubs:StubVLM", "n_slices": 6})
@@ -163,7 +135,8 @@ def test_end_to_end_pipeline_with_stub_models(tmp_path):
     os.chdir(ROOT)                                    # plugins are imported as tests.fixtures.*
     try:
         P.step_data(cfg)
-        P.step_train(cfg)
+        card = P.step_model(cfg)
+        assert card["trained_here"] is False
         P.step_infer(cfg)
         P.step_vlm(cfg)
         cal = P.step_calibrate(cfg)
@@ -181,7 +154,7 @@ def test_end_to_end_pipeline_with_stub_models(tmp_path):
         assert "SECOND READ" in rep and "stub-vlm" in rep
         calib = [bool(r["reference"]["tumour_present"]) for r in recs if r["split"] == "calib"]
         assert len(calib) == 5 and len(set(calib)) == 2   # seed 11: both classes -> the tools are compared
-        assert {"segmenter", "medgemma", "fused"} <= set(cal["tools_test"])
+        assert {"segmenter", "second_reader", "fused"} <= set(cal["tools_test"])
         assert figs and all(Path(f).exists() for f in figs)
         arrs = st.load_viewer(recs[0]["case_id"])
         assert "vlm_rgb" in arrs and arrs["vlm_rgb"].ndim == 4 and arrs["vlm_rgb"].shape[-1] == 3
@@ -196,3 +169,51 @@ def test_end_to_end_pipeline_with_stub_models(tmp_path):
     finally:
         P.release_models()
         os.chdir(cwd)
+
+
+# --------------------------------------------------------------------------- VISTA3D adapter
+def test_vista3d_adapter_geometry_classes_and_flip_tta():
+    """Stand-in network with VISTA3D's calling convention: an off-centre 'liver' block and a 'tumour' cube
+    must come back at the same place in the radiological view, with anisotropic spacing and flip TTA."""
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("monai")
+    from radagent.inference import segment_volume
+    from radagent.models.vista3d import A_MAX, A_MIN, LABEL_LIVER, LABEL_TUMOUR, Vista3DSegmenter
+
+    def scaled(hu):
+        return (hu - A_MIN) / (A_MAX - A_MIN)
+
+    class FakeVista(torch.nn.Module):
+        def forward(self, x, patch_coords=None, point_coords=None, point_labels=None, class_vector=None,
+                    prompt_class=None, transpose=False, **kw):
+            assert point_coords is None and class_vector.flatten().tolist() == [LABEL_LIVER, LABEL_TUMOUR]
+            liver = (x > scaled(40.0)) & (x < scaled(90.0))
+            tum = x > scaled(110.0)
+            logits = torch.cat([torch.where(liver | tum, 8.0, -8.0), torch.where(tum, 8.0, -8.0)], dim=1)
+            return logits                                          # [1, 2, h, w, d] (already "transposed")
+
+    Z, H, W = 40, 96, 80
+    view = np.full((Z, H, W), -1000.0, dtype=np.float32)
+    view[:, 8:88, 6:74] = 0.0                                      # body (soft tissue, not liver)
+    view[10:30, 20:60, 10:40] = 60.0                               # liver on the patient's right (view cols 10..40)
+    view[18:24, 30:40, 20:28] = 140.0                              # tumour inside it
+    cfg = load_config(None)
+    cfg["preprocess"]["img_size"] = 64
+    cfg["segmenter"].update({"resample_mm": 3.0, "roi_size": [32, 32, 32], "device": "cpu"})
+    seg = Vista3DSegmenter(cfg, network=FakeVista())
+    assert seg.n_passes == 2 and seg.describe()["backend"] == "vista3d"
+    spacing = (2.5, 1.5, 1.5)
+    probs = seg.predict_volume(view, spacing, 64)
+    assert probs.shape == (2, Z, 3, 64, 64) and probs.dtype == np.float16
+    assert np.allclose(probs.astype(np.float32).sum(axis=2), 1.0, atol=2e-2)
+    assert np.abs(probs[0].astype(np.float32) - probs[1].astype(np.float32)).max() < 0.2   # flip undone
+    lab = probs.astype(np.float32).mean(0).argmax(1)               # (Z, 64, 64)
+    r = lambda a: int(round(a * 64 / H))                          # noqa: E731 - row scale
+    c = lambda a: int(round(a * 64 / W))                          # noqa: E731 - col scale
+    assert (lab[20, r(25):r(55), c(12):c(38)] > 0).mean() > 0.9            # liver (or tumour) where it was put
+    assert (lab[20, r(25):r(55), c(50):c(70)] == 0).mean() > 0.95          # not mirrored to the left side
+    assert (lab[21, r(32):r(38), c(21):c(27)] == 2).mean() > 0.8           # tumour
+    assert (lab[2] == 0).all() and (lab[-2] == 0).all()                    # outside the liver's z-range
+    out = segment_volume(view, spacing, seg, cfg)
+    assert out.found_liver and out.n_passes == 2 and out.tumour.any() and 0 < out.z0 < 10 and 30 < out.z1 <= Z
+    assert out.p_raw > 0.9 and len(out.pass_scores) == 2

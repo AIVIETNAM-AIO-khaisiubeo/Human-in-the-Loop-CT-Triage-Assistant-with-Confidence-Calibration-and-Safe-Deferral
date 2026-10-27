@@ -1,8 +1,0 @@
-# MedGemma 1.5 second reader (GPU). Also needs requirements-deep.txt (torch).
-# Before the first run: accept the Health AI Developer Foundations terms on
-# https://huggingface.co/google/medgemma-1.5-4b-it and provide a Hugging Face token (HF_TOKEN).
-transformers>=4.50.0
-accelerate>=0.34
-huggingface_hub>=0.25
-packaging>=23.0
-bitsandbytes>=0.43; platform_system == "Linux"   # 4-bit loading on 16 GB GPUs such as the Colab T4

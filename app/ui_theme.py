@@ -201,11 +201,17 @@ def comparison(impression: int | None, impression_time: str | None, ai_label: in
 
 
 def evidence(*, finding: str, p: float, threshold: float, target: str, unc_level: str, unc_text: str,
-             qc_ok: bool, agreement_kind: str, agreement_text: str, agreement_interp: str) -> str:
-    """AI evidence in reading order: finding -> probability and target -> uncertainty and validity -> agreement."""
+             qc_ok: bool, agreement_kind: str | None = None, agreement_text: str = "",
+             agreement_interp: str = "") -> str:
+    """AI evidence in reading order: finding -> probability and target -> uncertainty and validity -> agreement.
+
+    ``agreement_kind=None`` (one model, no second reader) leaves the agreement row out."""
     unc_cls = "ra-dd-caution" if unc_level == "high" else ""
     ag_cls = "ra-dd-caution" if agreement_kind in ("disagree", "differ") else ""
     ag_ico = icon("alert", 13) if agreement_kind in ("disagree", "differ") else ""
+    ag_row = "" if agreement_kind is None else (
+        f'<div><dt>Model agreement</dt><dd class="{ag_cls}">{ag_ico}{esc(agreement_text)}'
+        f'<span class="ra-interp">{esc(agreement_interp)}</span></dd></div>')
     return f"""
 <section class="ra-ev" aria-label="AI evidence">
   <div class="ra-ev-find">{esc(finding)}</div>
@@ -214,8 +220,7 @@ def evidence(*, finding: str, p: float, threshold: float, target: str, unc_level
   <dl class="ra-dl">
     <div><dt>Uncertainty</dt><dd class="{unc_cls}">{esc(unc_text)}</dd></div>
     <div><dt>Validity</dt><dd>{'Automatic quality checks passed.' if qc_ok else 'Quality checks failed - output withheld.'}</dd></div>
-    <div><dt>Model agreement</dt><dd class="{ag_cls}">{ag_ico}{esc(agreement_text)}
-      <span class="ra-interp">{esc(agreement_interp)}</span></dd></div>
+    {ag_row}
   </dl>
 </section>"""
 
