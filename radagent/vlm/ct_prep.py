@@ -1,6 +1,6 @@
-"""Turning a CT volume into the image prompt MedGemma 1.5 was trained on.
+"""Turning a CT volume into RGB slice images for an optional vision-language second reader.
 
-From Google's ``high_dimensional_ct_hugging_face`` notebook (google-health/medgemma):
+Recipe from Google's ``high_dimensional_ct_hugging_face`` CT notebook:
 each axial slice becomes an 8-bit RGB image whose three channels are three CT windows,
 
     red   = wide window        -1024 .. 1024 HU

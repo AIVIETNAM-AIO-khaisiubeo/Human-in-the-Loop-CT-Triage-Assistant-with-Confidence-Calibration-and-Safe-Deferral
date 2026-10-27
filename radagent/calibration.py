@@ -5,7 +5,8 @@ scores are usually over-confident, so they are mapped to a probability on a *sep
 calibration split*. Two scores exist per case:
 
 * ``p_seg`` - the segmenter's case score (top tumour probabilities inside the liver);
-* ``p_vlm`` - MedGemma's P("yes") to "is there a liver tumour?" (may be missing).
+* ``p_vlm`` - an optional second reader's P("yes") to "is there a liver tumour?" (missing by
+  default: the project uses one model, so only ``identity``, ``temperature`` and ``platt`` apply).
 
 Candidate maps (``z`` = logit):
 
@@ -17,7 +18,7 @@ Candidate maps (``z`` = logit):
 
 ``auto`` picks the one with the lowest stratified k-fold cross-validated NLL *on the
 calibration split only* - the test split is never touched - so the data decide whether
-MedGemma adds anything over the segmenter.
+a second reader adds anything over the segmenter.
 
 Metrics: Brier score, expected calibration error (equal-width and equal-mass bins), NLL,
 AUROC, reliability-diagram tables and bootstrap confidence intervals.
@@ -100,9 +101,9 @@ class Calibrator:
         if self.method == "platt":
             return f"Platt scaling of the segmenter score (a = {self.a:.3f}, b = {self.b:.3f})"
         if self.method == "vlm":
-            return f"Platt scaling of MedGemma's P(yes) (a = {self.va:.3f}, b = {self.vb:.3f})"
+            return f"Platt scaling of the second reader's P(yes) (a = {self.va:.3f}, b = {self.vb:.3f})"
         if self.method == "fused":
-            return (f"fused logistic calibration: segmenter x {self.w[1]:.2f} + MedGemma x {self.w[2]:.2f} "
+            return (f"fused logistic calibration: segmenter x {self.w[1]:.2f} + second reader x {self.w[2]:.2f} "
                     f"(bias {self.w[0]:.2f})")
         return "uncalibrated (identity)"
 

@@ -1,6 +1,8 @@
 # Reading interface - UX design notes
 
-The website is the radiologist's side of ReaderAdapt-Liver. These notes record who it is for, the
+The website is the radiologist's side of ReaderAdapt-Liver. Since version 0.3 the AI is one pretrained model,
+NVIDIA VISTA3D; the second-reader evidence described in the round-2 and round-3 sections appears only when a
+research second reader is plugged in. These notes record who it is for, the
 reading journey it supports, the design rules derived from it, and how the two external design reviews
 (round 2 and round 3) were addressed. They are the reference for future UI changes.
 
@@ -42,7 +44,7 @@ unlocks it.
 | 0 | **Arrive** | Top bar; the Session menu if anything must change before the first read. |
 | 1 | **Plan** | Worklist. In *blind first read* (default) the table has **no AI column**: *# · Case · Image / AI QC · Reading status · Open*, in arrival order; nothing AI-derived is shown for unread cases (no prediction, probability, disagreement, AI priority or numeric QC details). A QC failure is a technical status with what can still be done (*images can be read manually* / *check the series*). One primary action: **Open next unread case**. |
 | 2 | **Independent read** | The viewer opens with every AI overlay locked and on the middle slice of the slab, not the AI's key slice. *Tumour present* / *No liver tumour*, then **Save impression and reveal AI evidence**. The impression is written to disk at once and is never replaced. |
-| 3 | **Evidence and limitations** | *01* your impression next to the AI suggestion as information (*same / different binary finding*), then *02* in reading order: AI finding → calibrated patient-level probability with its target, calibration set and threshold → uncertainty (stated scale) and validity (QC) → model agreement and what it means → supporting evidence on demand (measurements and lesions, second-reader model, uncertainty and calibration, versions). |
+| 3 | **Evidence and limitations** | *01* your impression next to the AI suggestion as information (*same / different binary finding*), then *02* in reading order: AI finding → calibrated patient-level probability with its target, calibration set and threshold → uncertainty (stated scale) and validity (QC) → supporting evidence on demand (measurements and lesions, uncertainty and calibration, model and versions, including the segmenter's training-data caveat). With an optional research second reader, a *model agreement* row and its interpretation follow validity. |
 | 4 | **Decide** | *03 Decision* is a footer that stays visible at the foot of the independently scrolling side panel: final finding, **Save decision**, **Defer…** (reason; records no final finding) and a save state: *Not saved · Unsaved changes · Saved hh:mm · Save failed*. Note and lesion edits are optional and sit above the footer. |
 | 5 | **Confirm** | The saved summary states the case, time, impression → final finding, the relation to the AI suggestion and *research decision saved · report draft not signed*. Next: **Next unread case** (primary), **Open report**, **Revise decision…** (a new decision that names the one it revises; the original stays in the log). |
 | 6 | **Recover** | Leaving a case with unsaved work asks *Save and continue / Discard and continue / Stay on this case*. Reopening a case after an interruption resumes with the saved impression (*Resumed. Your impression was saved at …*). |
@@ -57,7 +59,7 @@ unlocks it.
 | Technical validity | *Segmentation QC failed* | amber, square icon, plus what can still be done |
 | Clinical urgency (AI rule) | *Urgent by AI rule* (probability ≥ 85 % and a lesion ≥ 5 mL or ≥ 20 mm) | red triangle - the only use of red; AI-assisted triage only |
 | Workflow status | *Unread · Impression saved · Decided · Deferred* | neutral text with a small icon |
-| AI evidence characteristic | *AI models disagree*, *scores differ*, high uncertainty | amber text, labelled |
+| AI evidence characteristic | high uncertainty (and, only with a research second reader, *AI models disagree*) | amber text, labelled |
 
 **Colour has one meaning each** (contrast checked in `tests/test_app.py`):
 
@@ -98,8 +100,8 @@ logical focus order and visible focus.
 (*Case 01*, case id with status, QC, AI visibility, an optional hint, one *Open case* action) - and search, order
 and details are hidden. The case view shows *small screen - not for diagnostic interpretation*.
 
-**Failures are explicit**: images that cannot be loaded, failed QC, a missing second-reader result (*a missing
-result is not a negative result*) and a failed save each have a stated state; none looks like a valid negative.
+**Failures are explicit**: images that cannot be loaded, failed QC, a missing second-reader result when one is
+configured (*a missing result is not a negative result*) and a failed save each have a stated state; none looks like a valid negative.
 
 ## 5. Design review (round 2) - what changed
 
@@ -148,7 +150,7 @@ correctly.
 |---|---|---|---|
 | 1 | **Routine case**: open, read independently, reveal AI evidence, decide | Open next unread case → 01 → 02 → 03 | Decision saved; the reader can say what was saved and that the report is not signed |
 | 2 | **QC failure** | Technical status in the worklist, *What failed / What it means / What you can do* in the case | The reader reads manually or defers; does not treat it as urgent or as a negative result |
-| 3 | **Model disagreement** | *AI models disagree* with an interpretation; neither model is a reference | The reader relies on the images and does not assume one model is right |
+| 3 | **High AI uncertainty** (or model disagreement, if a research second reader is enabled) | uncertainty on a stated scale; a crisp contour is not certainty | The reader relies on the images and does not over-trust the suggestion |
 | 4 | **Interruption** | Impression saved at once; *Resumed* on reopening | The reader resumes without re-entering or confusing the saved impression |
 | 5 | **Navigation error** with unsaved work | *Save and continue / Discard and continue / Stay* | No silent loss; the reader chooses deliberately |
 | 6 | **Display variation** | Tested at 1440 / 1024 / 820 / 390 px; small-screen warning | Readable at the target resolution and scaling; diagnostic display behaviour verified separately |

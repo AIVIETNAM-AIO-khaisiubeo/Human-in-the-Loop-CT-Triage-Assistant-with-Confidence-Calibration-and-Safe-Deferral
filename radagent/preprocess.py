@@ -1,4 +1,4 @@
-"""Intensity windowing, resizing and 2.5D stacking (same recipe as the ViT-UNETR notebook)."""
+"""Intensity windowing, resizing and 2.5D stacking (viewer images and 2.5D plugin segmenters)."""
 from __future__ import annotations
 
 import cv2

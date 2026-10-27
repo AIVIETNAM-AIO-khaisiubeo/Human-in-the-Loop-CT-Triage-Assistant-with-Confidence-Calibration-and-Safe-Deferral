@@ -1,5 +1,5 @@
-# LiTS17 (Kaggle mirror) + ViT-UNETR 2.5D segmenter + MedGemma 1.5 4B second reader.
-# Run on a GPU (Colab: notebooks/colab_lits_pipeline.ipynb):
+# LiTS17 (Kaggle mirror) + one pretrained model: NVIDIA VISTA3D (MONAI) for liver and liver-tumour
+# segmentation. Nothing is trained. Run on a GPU (Colab: notebooks/colab_lits_pipeline.ipynb):
 #   python -m radagent all --config configs/lits.yaml
 # Everything not listed here uses the defaults in radagent/config.py.
 run_name: lits
@@ -9,33 +9,24 @@ data:
   # Empty -> both Kaggle parts are downloaded with kagglehub (or found in its cache).
   # Or list folders that already contain volume-*.nii and segmentation-*.nii.
   lits_dirs: []
-  # Reproduce the ViT-UNETR notebook split (RandomState(42), 80-case training pool), so that
-  # warm-starting from that notebook's checkpoint cannot leak calibration/test cases.
-  split_strategy: notebook_compatible
-  calib_fraction_of_heldout: 0.5   # the notebook's 51 held-out cases -> 26 calib + 25 test
+  split_fractions: {calib: 0.5, test: 0.5}   # 131 cases -> 65 calib + 66 test
   max_cases: null                  # e.g. 40 for a quick proportional subset
 
 preprocess:
   hu_window: [-100, 250]
   img_size: 256
-  margin_slices: 15
 
 segmenter:
-  backend: vitunetr
-  init_from: null        # e.g. checkpoints/vitunetr_liver_2class.pt saved from the liver notebook
-  epochs: 30             # ~20-30 min on an A100/L4; use 10-15 on a free T4
-  batch_size: 16
-  num_workers: 2
+  backend: vista3d       # NVIDIA VISTA3D, weights from Hugging Face MONAI/VISTA3D-HF (~870 MB, cached)
+  hf_revision: null      # pin a commit for exact reproducibility
+  sw_batch_size: 1       # 2-4 on a 40 GB GPU is faster
+  overlap: 0.25
 
 vlm:
-  backend: medgemma      # none = skip the second reader
-  model_id: google/medgemma-1.5-4b-it
-  n_slices: 16           # fewer = faster (8 on a T4 is fine)
-  describe: true
+  backend: none          # one model only; a second reader can be plugged in for research
 
 inference:
-  tta_flip: true
-  mc_samples: 2          # 2 MC-dropout samples x 2 flip views = 4 passes
+  tta_flip: true         # 2 passes: CT and its left-right mirror image (uncertainty)
   viewer_size: 192
   viewer_max_slices: 64
 

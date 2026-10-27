@@ -1,3 +1,7 @@
-# Segmentation tool (ViT-UNETR 2.5D; 2.5D U-Net alternative). Colab already ships torch.
+# The segmentation model: NVIDIA VISTA3D via MONAI, weights from Hugging Face (MONAI/VISTA3D-HF).
+# Colab already ships torch. A GPU is recommended (~15-60 s per CT on a T4; several minutes on a CPU).
 torch>=2.1
-timm>=0.9.16
+monai>=1.4
+einops>=0.7
+safetensors>=0.4
+huggingface_hub>=0.25

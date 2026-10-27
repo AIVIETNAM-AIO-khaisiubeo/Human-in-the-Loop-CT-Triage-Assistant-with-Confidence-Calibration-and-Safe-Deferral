@@ -1,7 +1,7 @@
 """Case-level confidence and uncertainty.
 
 ``tumour_probability``  calibrated probability that the case contains a tumour - from the
-                        segmenter score, MedGemma's P(yes) or both fused, whichever the
+                        segmenter score (or, with an optional second reader, its P(yes) or both fused), whichever the
                         calibration split selected (see :mod:`radagent.calibration`).
 ``uncertainty``         predictive entropy of that probability, in bits (0 = certain,
                         1 = p = 0.5). For a calibrated model the expected error of the
@@ -10,8 +10,8 @@
 Components reported so a reviewer can see *why* a case is uncertain:
 
 * expected entropy and mutual information over the segmenter's stochastic passes
-  (flip-TTA x MC dropout): total = aleatoric + epistemic (Depeweg et al. 2018);
-* the segmenter-only and MedGemma-only calibrated probabilities and whether the two AI
+  (the CT and its left-right flipped copy): total = aleatoric + epistemic (Depeweg et al. 2018);
+* with a second reader: both calibrated probabilities and whether the two AI
   tools disagree (one says tumour, the other does not).
 """
 from __future__ import annotations

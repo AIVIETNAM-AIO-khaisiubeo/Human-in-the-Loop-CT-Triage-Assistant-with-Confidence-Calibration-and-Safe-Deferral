@@ -12,16 +12,12 @@ two parts:
 Files are ``volume-<n>.nii`` (CT in Hounsfield units) and ``segmentation-<n>.nii``
 (0 background, 1 liver, 2 tumour). Both parts are needed to pair every CT with its mask.
 
-Split strategies
-----------------
-``notebook_compatible`` (default)
-    Reproduces the split of the ``ViTUNETR25D_LiverSegmentation`` notebook exactly
-    (``RandomState(42)`` shuffle of the sorted case numbers, first 80 = training pool,
-    15 % of them = validation). Its 51 held-out cases are divided into **calib** and
-    **test**. A model warm-started from that notebook has therefore never seen a
-    calibration or test case.
-``random``
-    Patient-level random split into train / val / calib / test.
+Split
+-----
+Nothing is trained in this project (the segmenter is the pretrained NVIDIA VISTA3D), so the
+cases are split patient-level at random into **calib** (fits the calibration of the model's
+case score) and **test** (evaluation). Note that VISTA3D's own training data include MSD
+Task 03, which is built from these LiTS training volumes - see README section "Model".
 """
 from __future__ import annotations
 
@@ -36,7 +32,7 @@ import pandas as pd
 
 
 def case_number(path: str) -> int:
-    """Case number = last number in the file name (``volume-12.nii`` -> 12), as in the notebook."""
+    """Case number = last number in the file name (``volume-12.nii`` -> 12)."""
     return int(re.findall(r"\d+", os.path.basename(path).split(".")[0])[-1])
 
 
@@ -116,24 +112,6 @@ def locate(path: str, cfg: dict) -> str:
     return str(path)
 
 
-def notebook_compatible_split(ids: list[int], seed: int = 42, n_train: int = 80, val_frac: float = 0.15,
-                              calib_fraction: float = 0.5, heldout_seed: int = 13) -> dict[int, str]:
-    arr = np.array(sorted(ids))
-    np.random.RandomState(seed).shuffle(arr)
-    train_pool = arr[:n_train].tolist()
-    heldout = sorted(arr[n_train:].tolist())
-    n_val = int(val_frac * len(train_pool))
-    val_ids, train_ids = train_pool[:n_val], train_pool[n_val:]
-    h = np.array(heldout)
-    np.random.RandomState(heldout_seed).shuffle(h)
-    n_cal = int(round(calib_fraction * len(h)))
-    split = {int(i): "train" for i in train_ids}
-    split.update({int(i): "val" for i in val_ids})
-    split.update({int(i): "calib" for i in h[:n_cal]})
-    split.update({int(i): "test" for i in h[n_cal:]})
-    return split
-
-
 def random_split(ids: list[int], fractions: dict[str, float], seed: int = 13) -> dict[int, str]:
     arr = np.array(sorted(ids))
     np.random.RandomState(seed).shuffle(arr)
@@ -168,20 +146,7 @@ def build_manifest(cfg: dict, allow_download: bool = True) -> pd.DataFrame:
     if not pairs:
         raise FileNotFoundError(f"no volume-*/segmentation-* pairs found under {dirs}")
     ids = sorted(pairs)
-    strategy = d["split_strategy"]
-    if strategy == "notebook_compatible":
-        if len(ids) != 131:
-            print(f"[data] WARNING: found {len(ids)} CT/mask pairs, not the 131 of LiTS - the split will "
-                  "not match the ViT-UNETR notebook (check that BOTH Kaggle parts were downloaded)")
-        if len(ids) <= d["notebook_n_train"]:
-            print("[data] too few cases for the notebook split - using a random split instead")
-            strategy = "random"
-    if strategy == "notebook_compatible":
-        split = notebook_compatible_split(ids, seed=d["notebook_seed"], n_train=d["notebook_n_train"],
-                                          val_frac=d["notebook_val_frac"],
-                                          calib_fraction=d["calib_fraction_of_heldout"], heldout_seed=cfg["seed"])
-    else:
-        split = random_split(ids, d["split_fractions"], seed=cfg["seed"])
+    split = random_split(ids, d["split_fractions"], seed=cfg["seed"])
     rows = [{"case_id": f"lits_{i:03d}", "number": i, "ct_path": _portable(pairs[i][0]),
              "mask_path": _portable(pairs[i][1]), "split": split[i]} for i in ids]
     df = pd.DataFrame(rows)

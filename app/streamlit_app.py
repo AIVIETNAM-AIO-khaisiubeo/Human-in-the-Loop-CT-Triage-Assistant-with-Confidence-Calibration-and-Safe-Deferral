@@ -2,8 +2,8 @@
 
     python -m streamlit run app/streamlit_app.py -- --run outputs/lits
 
-(or set the environment variable RA_RUN=outputs/lits). Data: LiTS17. AI tools: ViT-UNETR 2.5D
-segmentation model + MedGemma 1.5 second-reader model.
+(or set the environment variable RA_RUN=outputs/lits). Data: LiTS17. One pretrained AI model: NVIDIA
+VISTA3D (MONAI) for liver and liver-tumour segmentation; nothing is trained in this project.
 
 Layout: one compact top bar (identity, the two working modes Worklist / Read case, a *Session*
 menu and a *Research* (research and quality) menu) - no persistent sidebar, so the CT viewer gets the width.
@@ -21,7 +21,7 @@ Safety rules built into the flow:
 * Every decision is stored with the recommendation that was on screen and the session, policy and
   model-set versions; a revision records what it supersedes.
 * Leaving a case with unsaved work asks: save, discard or stay. Nothing is discarded silently.
-* Failures (images, QC, second reader, saving) are stated explicitly and never look like a negative result.
+* Failures (images, QC, saving) are stated explicitly and never look like a negative result.
 
 Research prototype. Every output is a research prediction, not for clinical use.
 """
@@ -56,7 +56,7 @@ from radagent.plots import tool_names  # noqa: E402
 from radagent.readers.feedback import FeedbackStore  # noqa: E402
 from radagent.report import draft_report  # noqa: E402
 from radagent.triage import CATEGORY_HELP  # noqa: E402
-from radagent.vlm.prompts import PROMPT_VERSION  # noqa: E402
+from radagent.vlm import vlm_enabled  # noqa: E402
 
 PRIMARY = {"worklist": ":material/format_list_bulleted: Worklist", "read": ":material/visibility: Read case"}
 RESEARCH = {"adapt": ("Reader adaptation", ":material/tune:"), "perf": ("Model performance", ":material/monitoring:"),
@@ -154,8 +154,8 @@ if not runs:
         st.markdown("""
 #### Create a run on Google Colab (GPU)
 1. Open `notebooks/colab_lits_pipeline.ipynb` in Colab with a GPU runtime.
-2. Add the secrets `KAGGLE_API_TOKEN` (LiTS download) and `HF_TOKEN` (MedGemma - accept the terms on the
-   `google/medgemma-1.5-4b-it` model page first).
+2. Add the secret `KAGGLE_API_TOKEN` (LiTS download). The pretrained NVIDIA VISTA3D weights are downloaded
+   from Hugging Face automatically (no token needed).
 3. Run all cells. The last cells open this website from Colab or download `lits_run.zip`.
 """)
     with c2:
@@ -394,6 +394,8 @@ case = cases[case_id]
 decision = policy.decide(case["p"], case["u"], case["qc_passed"])
 row = wlo.set_index("case_id").loc[case_id]
 seg_name, vlm_name = tool_names(cfg)
+second = vlm_enabled(cfg)          # an optional second reader; off by default (one model)
+card = R.get("model_card") or {}
 
 
 def _hide_ai(cid: str) -> bool:
@@ -431,8 +433,8 @@ def _research_header(title: str, subtitle: str) -> None:
 # =========================================================================== Worklist
 def view_worklist() -> None:
     sub = ("Blind first read · cases in arrival order · AI findings stay hidden until you save your impression."
-           if blind else "AI-assisted triage · ordered by AI priority (probability, lesion size, uncertainty, "
-                         "model disagreement).")
+           if blind else "AI-assisted triage · ordered by AI priority (probability, lesion size, uncertainty"
+                         + (", model disagreement)." if second else ")."))
     if not live:
         sub = f"Research simulation as {reader_name} · AI triage is shown."
     html(T.page_title("Worklist", sub))
@@ -448,7 +450,8 @@ def view_worklist() -> None:
     if not blind:
         n_urg, n_dis = int((unread.category == "URGENT").sum()), int((unread.agree == "disagree").sum())
         groups.append(("urgency" if n_urg else "workflow", [("urgent by AI rule", str(n_urg))]))
-        groups.append(("evidence" if n_dis else "workflow", [("AI models disagree", str(n_dis))]))
+        if second:
+            groups.append(("evidence" if n_dis else "workflow", [("AI models disagree", str(n_dis))]))
     html(T.summary_line(groups))
     qc_unread = int((unread.qc_kind != "ok").sum())
     if qc_unread:
@@ -549,14 +552,14 @@ def view_worklist() -> None:
                 st.button("Open case  →", key=f"mopen_{r.case_id}", on_click=_request, args=("read", r.case_id),
                           width="stretch")
     with st.expander("How to read this list"):
-        html("<p>Four separate kinds of status are used, and none implies another:</p><ul>"
+        html("<p>Separate kinds of status are used, and none implies another:</p><ul>"
              f"<li>{T.icon('square', 13)} <b>Image / AI QC</b> - technical: whether the AI output can be used. A failed "
              "check withholds the AI output; it is never a clinical finding or an urgency level.</li>"
              f"<li>{T.icon('triangle', 13)} <b>Urgent by AI rule</b> - an AI triage rule "
              f"({T.esc(U.urgent_rule(cfg))}), shown in AI-assisted triage only.</li>"
              "<li><b>Reading status</b> - workflow: unread, impression saved, decided or deferred.</li>"
-             f"<li>{T.icon('alert', 13)} <b>Model disagreement</b> - a characteristic of the AI evidence: the two AI "
-             "tools reach different conclusions.</li></ul>")
+             + (f"<li>{T.icon('alert', 13)} <b>Model disagreement</b> - a characteristic of the AI evidence: the two "
+                "AI tools reach different conclusions.</li>" if second else "") + "</ul>")
         for k, v in CATEGORY_HELP.items():
             if k != "QC FAIL":
                 html(f"<p>{T.badge(k)} &nbsp;{T.esc(v)}</p>")
@@ -864,9 +867,10 @@ def _impression_panel() -> None:
             html(T.note(T.esc(err["msg"]), "critical"))
         html(T.save_state("unsaved", "Impression not saved yet") if imp else
              T.save_state("none", "No impression recorded"))
-        st.caption("Hidden until then: the AI prediction, segmentation overlays, uncertainty, the agreement between "
-                   "the two AI models and the case's AI priority. Your impression is saved immediately and cannot be "
-                   "changed afterwards.")
+        st.caption("Hidden until then: the AI prediction, segmentation overlays, uncertainty"
+                   + (", the agreement between the two AI models" if second else "")
+                   + " and the case's AI priority. Your impression is saved immediately and cannot be changed "
+                     "afterwards.")
 
 
 def _evidence_panel(n: str, m: dict, c: dict, q: dict, qc: dict, arrs: dict) -> None:
@@ -892,9 +896,11 @@ def _evidence_panel(n: str, m: dict, c: dict, q: dict, qc: dict, arrs: dict) -> 
             target=f"Patient-level probability that this CT shows at least one liver tumour · {cal_txt} · "
                    f"suggestion threshold {U.pct(policy.threshold)}",
             unc_level=c["uncertainty_level"], unc_text=U.uncertainty_phrase(c["uncertainty"]), qc_ok=True,
-            agreement_kind=ag["kind"], agreement_text=ag["text"], agreement_interp=ag["interpretation"]))
+            agreement_kind=ag["kind"] if second else None, agreement_text=ag["text"],
+            agreement_interp=ag["interpretation"]))
     if _hide_ai(case_id) or not q["passed"]:
-        st.caption("AI measurements, the second-reader result and uncertainty details are not shown "
+        st.caption("AI measurements" + (", the second-reader result" if second else "") + " and uncertainty details "
+                   "are not shown "
                    + ("because quality control failed." if not q["passed"] else "during an independent read."))
     else:
         with st.expander("Segmentation measurements and lesions", icon=":material/straighten:"):
@@ -920,28 +926,30 @@ def _evidence_panel(n: str, m: dict, c: dict, q: dict, qc: dict, arrs: dict) -> 
                     "mean_probability": st.column_config.NumberColumn("Mean voxel probability", format="%.2f"),
                     "slice_range": "Slices"})
             st.caption("Measured from the AI segmentation at the original resolution.")
-        with st.expander("Second-reader model (image and text)", icon=":material/neurology:"):
-            if v.get("status") != "ok":
-                st.markdown(f"**No second-reader result for this case** ({v.get('reason', v.get('status', 'not run'))}). "
-                            "A missing result is not a negative result; model agreement cannot be assessed.")
-            else:
-                st.markdown(f"The second-reader model looked at {v.get('n_images')} axial slices through the predicted "
-                            f"liver. Its patient-level probability of a liver tumour: **{U.pct(c.get('vlm_probability'))}"
-                            f"** (calibrated; raw {U.pct(v['p_yes'])}).")
-                if "vlm_rgb" in arrs:
-                    st.image([im for im in arrs["vlm_rgb"]], width=96,
-                             caption=[f"slice {int(z) + 1}" for z in arrs["vlm_z"]])
-                    st.caption("Model input format: red = wide window, green = soft tissue, blue = narrow window.")
-                if v.get("text"):
-                    html(T.note("<b>Unverified model text</b>, quoted as written. It is never used for measurements or "
-                                "for the suggestion.", "info"))
-                    st.text(v["text"])
-                for note_ in (v.get("guard") or {}).get("notes", []):
-                    html(T.note("<b>Check:</b> " + T.esc(note_), "warn"))
+        if second:
+            with st.expander("Second-reader model (image and text)", icon=":material/neurology:"):
+                if v.get("status") != "ok":
+                    st.markdown(f"**No second-reader result for this case** ({v.get('reason', v.get('status', 'not run'))}). "
+                                "A missing result is not a negative result; model agreement cannot be assessed.")
+                else:
+                    st.markdown(f"The second-reader model looked at {v.get('n_images')} axial slices through the predicted "
+                                f"liver. Its patient-level probability of a liver tumour: **{U.pct(c.get('vlm_probability'))}"
+                                f"** (calibrated; raw {U.pct(v['p_yes'])}).")
+                    if "vlm_rgb" in arrs:
+                        st.image([im for im in arrs["vlm_rgb"]], width=96,
+                                 caption=[f"slice {int(z) + 1}" for z in arrs["vlm_z"]])
+                        st.caption("Model input format: red = wide window, green = soft tissue, blue = narrow window.")
+                    if v.get("text"):
+                        html(T.note("<b>Unverified model text</b>, quoted as written. It is never used for measurements or "
+                                    "for the suggestion.", "info"))
+                        st.text(v["text"])
+                    for note_ in (v.get("guard") or {}).get("notes", []):
+                        html(T.note("<b>Check:</b> " + T.esc(note_), "warn"))
         with st.expander("Uncertainty and calibration", icon=":material/insights:"):
             uc = c.get("uncertainty_components", {})
             st.markdown(f"- {U.UNCERTAINTY_DEFINITION}\n"
-                        f"- This case: total {c['uncertainty']:.2f}; disagreement between the model's stochastic passes "
+                        f"- This case: total {c['uncertainty']:.2f}; disagreement between the model's passes on the CT and "
+                        f"on its mirror image "
                         f"(epistemic) {uc.get('mutual_information', 0.0):.2f}; expected noise (aleatoric) "
                         f"{uc.get('expected_entropy', 0.0):.2f}.\n"
                         f"- Calibration: {c.get('calibrator', '-')}"
@@ -955,10 +963,14 @@ def _evidence_panel(n: str, m: dict, c: dict, q: dict, qc: dict, arrs: dict) -> 
     with st.expander("Models and versions", icon=":material/settings:"):
         model = record.get("model", {})
         st.markdown(f"- Model set **{mv['id']}** · decision policy **{pol_ver}** ({policy.summary()})\n"
-                    f"- Segmentation model: {seg_name} ({model.get('backend', '-')} v{model.get('version', '-')}, "
-                    f"{model.get('passes', '-')} passes)\n"
-                    f"- Second-reader model: {(v.get('model') or {}).get('model_id', vlm_name)} · prompt "
-                    f"{PROMPT_VERSION}\n- Session {ss.session_id}")
+                    f"- Segmentation model: {seg_name} ({model.get('version', model.get('backend', '-'))}, "
+                    f"{model.get('passes', '-')} test-time passes; pretrained, not trained in this project)\n"
+                    + (f"- Weights: {card.get('source')} ({card.get('revision', 'main')}) · licence: "
+                       f"{card.get('license')}\n" if card.get("source") else "")
+                    + (f"- Second-reader model: {(v.get('model') or {}).get('model_id', vlm_name)}\n" if second else "")
+                    + f"- Session {ss.session_id}")
+        if card.get("training_data_overlap"):
+            st.caption("Training data: " + card["training_data_overlap"])
         st.caption(_policy_source() + (" " + " · ".join(policy.notes) if policy.notes else ""))
 
 
@@ -1304,20 +1316,27 @@ def view_perf() -> None:
     cal = R.get("calibration") or {}
     mc = R.get("model_card") or {}
     tools = cal.get("tools_test") or {}
-    _research_header("Model performance", "Held-out LiTS17 test cases. Reader results come from simulated readers and "
-                                          "are not evidence of clinical benefit.")
+    _research_header("Model performance", f"{seg_name} on the LiTS17 test cases. Reader results come from simulated "
+                                          "readers and are not evidence of clinical benefit.")
+    if mc.get("training_data_overlap"):
+        html(T.note("<b>Not a held-out evaluation of the segmenter.</b> " + T.esc(mc["training_data_overlap"])
+                    + " The calibration and the reader experiments are still split correctly (calib vs test).",
+                    "warn"))
     t = []
     if cal.get("test"):
         a, b = cal["test"]["after"], cal["test"]["before"]
         t += [("Test AUROC", f"{a['auroc']:.2f}", ""), ("Calibration error (ECE)", f"{a['ece']:.3f}", f"raw {b['ece']:.3f}"),
               ("Brier score", f"{a['brier']:.3f}", f"raw {b['brier']:.3f}")]
-    dice = (mc.get("val_dice_slicewise") or {}).get("tumour")
-    if dice is not None:
-        t.append(("Tumour Dice (validation)", f"{dice:.2f}", ""))
+    refs = [r.get("reference") or {} for r in records.values() if r.get("split") == "test"]
+    for key, label in (("dice_liver", "Liver Dice (test)"), ("dice_tumour", "Tumour Dice (test, cases with tumour)")):
+        vals = [x[key] for x in refs if x.get(key) is not None and np.isfinite(x[key])
+                and (key != "dice_tumour" or x.get("tumour_present"))]
+        if vals:
+            t.append((label, f"{float(np.mean(vals)):.2f}", f"n={len(vals)}"))
     if t:
         html(T.measures(t))
     if tools:
-        names = {"segmenter": f"Segmentation model ({seg_name})", "medgemma": f"Second-reader model ({vlm_name})",
+        names = {"segmenter": f"Segmentation model ({seg_name})", "second_reader": f"Second-reader model ({vlm_name})",
                  "fused": "Both combined"}
         st.markdown("#### The AI tools on the test cases")
         st.dataframe(pd.DataFrame([{"Tool": names.get(k, k), "Cases": r["n"], "With tumour": r["n_pos"],
@@ -1402,7 +1421,7 @@ def view_audit() -> None:
                                               format_func={"rule": "Rules", "llm": "Open LLM"}.get) or "rule"
         recompute = c1.toggle("Recompute from the CT file (runs both AI models now)", value=False,
                               disabled=not can_recompute, key="recompute",
-                              help="Needs the LiTS CT on this machine and PyTorch (a GPU for the second-reader model). "
+                              help="Needs the LiTS CT on this machine, PyTorch and MONAI (a GPU is recommended for VISTA3D). "
                                    + ("" if can_recompute else ("CT file not found here. " if not ct_ok else "")
                                       + ("PyTorch not installed. " if not torch_ok else "")))
         if c2.button("Run both models now" if recompute else "Re-run the agent", key="rerun_btn",
@@ -1431,9 +1450,10 @@ def view_about() -> None:
     with c1:
         st.markdown(f"""
 #### Intended use (research)
-- Organise a liver-CT worklist and pre-read each case: liver and tumour segmentation by **{seg_name}**,
-  measurements at the original resolution, a calibrated patient-level probability and its uncertainty.
-- A second opinion from **{vlm_name}**; cases where the two AI tools disagree are flagged.
+- Organise a liver-CT worklist and pre-read each case: liver and tumour segmentation by **{seg_name}**
+  (one pretrained model, used as published - nothing is trained in this project), measurements at the
+  original resolution, a calibrated patient-level probability and its uncertainty.
+{"- A second opinion from **" + vlm_name + "**; cases where the two AI tools disagree are flagged." if second else ""}
 - Study how individual readers use the AI and whether reader-specific policies help - offline, with
   authorised, versioned and logged changes only.
 """)
@@ -1442,7 +1462,8 @@ def view_about() -> None:
 #### Not intended for
 - Clinical diagnosis or patient management - a research prototype on public, de-identified data.
 - Replacing a radiologist's read: **the radiologist decides every finding**.
-- Measurements from the language model: all sizes come from the segmentation; model text is unverified.
+- Judging the segmenter on LiTS: its training data include the LiTS volumes (MSD Task 03), so LiTS
+  results are optimistic. Use an external dataset to evaluate it.
 """)
     st.markdown("""
 #### Supported devices
@@ -1454,15 +1475,15 @@ def view_about() -> None:
 #### When something goes wrong
 - **Images cannot be loaded:** an explicit error is shown; no AI result is shown and nothing looks normal.
 - **QC fails:** the AI output is withheld and the reason, the consequence and what you can still do are stated.
-- **No second-reader result:** said explicitly; it is never treated as a negative result.
 - **A save fails:** the decision panel shows *Save failed* and nothing is recorded; try again.
 - **Interrupted session:** impressions are saved at once; reopening the case resumes with the original impression.
 - **Leaving a case with unsaved work:** you choose to save, discard or stay.
 """)
     st.markdown("#### How a case is pre-read")
     html(T.flow([("CT volume", "LiTS NIfTI, voxel spacing", "data"), ("Segmentation model", seg_name, "ai"),
-                 ("Measure", "volumes, diameters", "step"), ("Quality control", "operational checks", "step"),
-                 ("Second-reader model", vlm_name, "ai"), ("Calibrated probability", "+ uncertainty", "step"),
+                 ("Measure", "volumes, diameters", "step"), ("Quality control", "operational checks", "step")]
+                + ([("Second-reader model", vlm_name, "ai")] if second else [])
+                + [("Calibrated probability", "+ uncertainty", "step"),
                  ("Triage", "AI priority (hidden in blind read)", "step"), ("Independent read", "your impression", "human"),
                  ("Decide", "final finding or defer", "human"), ("Report draft", "fixed template, not signed", "step")]))
     st.caption(f"Run directory: {store.root}")

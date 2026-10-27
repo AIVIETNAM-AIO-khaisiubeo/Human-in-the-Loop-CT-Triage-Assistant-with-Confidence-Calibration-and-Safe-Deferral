@@ -1,9 +1,9 @@
-"""Two-stage, uncertainty-aware inference on one CT volume.
+"""Uncertainty-aware inference on one CT volume.
 
-Stage 1 - localisation: one deterministic pass over every slice finds the liver's
-z-range (largest 3D foreground component).
-Stage 2 - analysis: all stochastic passes (flip-TTA x MC-dropout, or the ensemble
-members of the classical baseline) are run only on the liver slab +/- 10 mm.
+3D models (VISTA3D, the default) segment the whole volume in every pass (plain and
+left-right flipped); the liver's z-range is then taken from the mean prediction.
+2.5D slice models (the test stand-ins) run in two stages: one deterministic pass over every
+slice finds the liver's z-range, then all stochastic passes run on the liver slab +/- 10 mm.
 
 Outputs (model resolution, liver slab only): mean class probabilities, every pass's
 tumour map, post-processed liver/tumour masks, voxel entropy, and the case-level
@@ -101,11 +101,46 @@ class SegOutput:
 
 
 def segment_volume(view_hu: np.ndarray, spacing: tuple, segmenter, cfg: dict) -> SegOutput:
+    if hasattr(segmenter, "predict_volume"):
+        return _segment_volume_3d(view_hu, spacing, segmenter, cfg)
+    return _segment_volume_25d(view_hu, spacing, segmenter, cfg)
+
+
+def _eff_spacing(view_hu: np.ndarray, spacing: tuple, S: int) -> tuple:
+    Z, H, W = view_hu.shape
+    return (float(spacing[0]), float(spacing[1]) * H / S, float(spacing[2]) * W / S)
+
+
+def _slab(fg: np.ndarray, eff: tuple) -> tuple[int, int]:
+    zidx = np.where(fg.any(axis=(1, 2)))[0]
+    m = max(2, int(math.ceil(10.0 / eff[0])))
+    return max(0, int(zidx.min()) - m), min(fg.shape[0], int(zidx.max()) + m + 1)
+
+
+def _segment_volume_3d(view_hu: np.ndarray, spacing: tuple, segmenter, cfg: dict) -> SegOutput:
+    S = cfg["preprocess"]["img_size"]
+    eff = _eff_spacing(view_hu, spacing, S)
+    t0 = time.time()
+    probs = segmenter.predict_volume(view_hu, spacing, S)              # (P, Z, 3, S, S)
+    t_inf = time.time() - t0
+    fg_prob = (probs[:, :, 1].astype(np.float32) + probs[:, :, 2].astype(np.float32)).mean(axis=0)
+    fg = largest_component(fg_prob > 0.5)
+    del fg_prob
+    if not fg.any():
+        return SegOutput(found_liver=False, img_size=S, eff_spacing=eff, n_passes=int(probs.shape[0]),
+                         timings={"infer": t_inf})
+    z0, z1 = _slab(fg, eff)
+    mean = probs[:, z0:z1].astype(np.float32).mean(axis=0)
+    passes = probs[:, z0:z1, 2].astype(np.float16)
+    del probs
+    return _finish(mean, passes, z0, z1, S, eff, cfg, {"infer": t_inf})
+
+
+def _segment_volume_25d(view_hu: np.ndarray, spacing: tuple, segmenter, cfg: dict) -> SegOutput:
     S = cfg["preprocess"]["img_size"]
     bs = int(cfg["inference"]["batch_size"])
     Z, H, W = view_hu.shape
-    eff = (float(spacing[0]), float(spacing[1]) * H / S, float(spacing[2]) * W / S)
-    eff_vox = eff[0] * eff[1] * eff[2]
+    eff = _eff_spacing(view_hu, spacing, S)
     t0 = time.time()
     img = preprocess_volume(view_hu, tuple(cfg["preprocess"]["hu_window"]), S)
     t_pre = time.time() - t0
@@ -122,9 +157,7 @@ def segment_volume(view_hu: np.ndarray, spacing: tuple, segmenter, cfg: dict) ->
     if not fg.any():
         return SegOutput(found_liver=False, img_size=S, eff_spacing=eff,
                          timings={"preprocess": t_pre, "localise": t_loc})
-    zidx = np.where(fg.any(axis=(1, 2)))[0]
-    m = max(2, int(math.ceil(10.0 / eff[0])))
-    z0, z1 = max(0, int(zidx.min()) - m), min(Z, int(zidx.max()) + m + 1)
+    z0, z1 = _slab(fg, eff)
 
     # ---- stage 2: stochastic passes on the liver slab (in-plane ROI = liver bbox + 15 mm)
     t0 = time.time()
@@ -145,9 +178,14 @@ def segment_volume(view_hu: np.ndarray, spacing: tuple, segmenter, cfg: dict) ->
         mean[i0:i0 + len(zs)] = pr.mean(axis=0)
         passes[:, i0:i0 + len(zs)] = pr[:, :, 2].astype(np.float16)
     t_inf = time.time() - t0
+    return _finish(mean, passes, z0, z1, S, eff, cfg, {"preprocess": t_pre, "localise": t_loc, "infer": t_inf})
 
-    # ---- post-processing (model resolution)
+
+def _finish(mean: np.ndarray, passes: np.ndarray, z0: int, z1: int, S: int, eff: tuple, cfg: dict,
+            timings: dict) -> SegOutput:
+    """Post-processing at model resolution: masks, case-level raw score, per-pass scores, entropy."""
     t0 = time.time()
+    eff_vox = eff[0] * eff[1] * eff[2]
     min_ml = float(cfg["inference"]["min_lesion_ml"])
     k = max(1, int(math.ceil(min_ml * 1000.0 / eff_vox)))
     min_comp = max(1, int(round(min_ml * 1000.0 / eff_vox)))
@@ -169,8 +207,8 @@ def segment_volume(view_hu: np.ndarray, spacing: tuple, segmenter, cfg: dict) ->
     pass_scores = [topk_mean(smooth(passes[p].astype(np.float32))[region], k) for p in range(passes.shape[0])]
     eps = 1e-7
     entropy = -(mean * np.log(mean + eps)).sum(axis=1) / math.log(3.0)
-    t_post = time.time() - t0
+    timings = {**timings, "postprocess": time.time() - t0}
     return SegOutput(found_liver=bool(liver.any()), z0=z0, z1=z1, img_size=S, eff_spacing=eff, mean=mean,
                      pass_tumour=passes, liver=liver, tumour=tumour, entropy=entropy.astype(np.float32),
                      p_raw=p_raw, pass_scores=pass_scores, k_voxels=k, n_passes=int(passes.shape[0]),
-                     timings={"preprocess": t_pre, "localise": t_loc, "infer": t_inf, "postprocess": t_post})
+                     timings=timings)

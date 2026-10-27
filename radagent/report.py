@@ -2,7 +2,7 @@
 
 Every finding in the draft is a fixed template filled with measured values and model
 outputs, so it is reproducible and auditable. The one exception is the clearly separated
-SECOND READ section: MedGemma's own words, quoted verbatim, labelled as unverified model
+SECOND READ section (only with an optional second reader): its own words, quoted verbatim, labelled as unverified model
 text and checked by guardrails (sizes the measurement tool did not produce, a written
 conclusion that contradicts the model's own yes/no probability). The radiologist's
 decision is a separate, clearly attributed section.
@@ -49,9 +49,10 @@ def draft_report(record: dict, review: dict | None = None, policy: dict | None =
          (f"Geometry: {g.get('shape_on_disk')} voxels on disk ({''.join(g.get('orientation_on_disk', []))}), "
           f"spacing {g.get('spacing_mm', ['?'] * 3)[2]:.2f} x {g.get('spacing_mm', ['?'] * 3)[1]:.2f} x "
           f"{g.get('spacing_mm', ['?'] * 3)[0]:.2f} mm (col x row x slice)") if g else "Geometry: -",
-         f"AI tools: segmenter {model.get('backend', '-')} v{model.get('version', '-')} "
-         f"({model.get('passes', '-')} stochastic passes); second reader "
-         f"{(record.get('vlm') or {}).get('model', {}).get('model_id', 'none')}",
+         f"AI tool: segmenter {model.get('version', model.get('backend', '-'))} "
+         f"({model.get('passes', '-')} test-time passes)"
+         + (f"; second reader {(record.get('vlm') or {}).get('model', {}).get('model_id')}"
+            if (record.get("vlm") or {}).get("status") == "ok" else ""),
          f"Confidence: {c.get('calibrator', '-')}", ""]
 
     L.append("QUALITY CONTROL")

@@ -39,7 +39,7 @@ This notebook re-computes every number of the evaluation from a finished run dir
 |---|---|---|
 | 1 | Data | What was evaluated, with which patient-level split? |
 | 2 | Step 1 | How good are segmentation and measurement? |
-| 3 | Step 1-2 | How do the two AI tools (ViT-UNETR segmenter, MedGemma second reader) compare, and is their fusion better? |
+| 3 | Step 1-2 | How well does the pretrained segmenter's case score (NVIDIA VISTA3D) separate tumour from no-tumour cases? |
 | 3b | Step 2 | Is the case-level confidence calibrated (Brier, ECE, reliability)? |
 | 4 | Step 2/4 | Does uncertainty identify AI errors (selective prediction)? |
 | 5 | Step 3 | Does the triage order surface tumour cases first? |
@@ -48,6 +48,10 @@ This notebook re-computes every number of the evaluation from a finished run dir
 
 > **Research prototype.** Simulated readers show that the method behaves as designed; they are *not*
 > evidence of clinical benefit or of reading-time savings.
+>
+> **Segmenter evaluation caveat.** The one model used, NVIDIA VISTA3D, was trained on data that include MSD
+> Task 03 (built from the LiTS training volumes). Segmentation and AUROC numbers on LiTS are therefore
+> optimistic; they are not a held-out evaluation of VISTA3D.
 
 Set `RUN` below to the run you want to evaluate - by default `outputs/lits`, the run made by
 `notebooks/colab_lits_pipeline.ipynb` on LiTS17 (unzip `lits_run.zip` into `outputs/`).
@@ -73,13 +77,13 @@ test = [r for r in records if r["split"] == "test"]
 calib = [r for r in records if r["split"] == "calib"]
 pd.set_option("display.precision", 3)
 print(f"run: {RUN.name} | data: LiTS17 | segmenter: {cfg['segmenter']['backend']} | "
-      f"second reader: {cfg['vlm']['model_id'] if cfg['vlm']['backend'] == 'medgemma' else cfg['vlm']['backend']} | "
+      f"second reader: {cfg['vlm']['backend']} | "
       f"records: {len(records)} (calib {len(calib)}, test {len(test)})")
 """),
     md("## 1. Data and splits\nSplits are by patient/case; the calibrator and reader policies never see a test case."),
     code("""
 man = store.manifest()
-split_counts = man.groupby("split").size().reindex(["train", "val", "calib", "test"])
+split_counts = man.groupby("split").size().reindex(["calib", "test"])
 pos = {s: int(sum(r["reference"]["tumour_present"] for r in records if r["split"] == s)) for s in ("calib", "test")}
 pd.DataFrame({"cases": split_counts,
               "with tumour (reference)": pd.Series(pos)}).fillna("-")
@@ -130,12 +134,10 @@ axes[1].set_title("Tumour volume (log scale)", loc="left")
 plt.tight_layout()
 """),
     md("""
-## 3. Two AI tools: ViT-UNETR segmenter vs MedGemma 1.5 second reader
-The segmenter gives a **case score** (mean of the top-k smoothed tumour probabilities inside the liver, k = 0.1 ml).
-MedGemma 1.5 4B reads 16 three-window axial slices through the predicted liver and gives **P(yes)** for
-"is there a focal liver lesion suspicious for tumour?" (from the probabilities of its first answer token).
-Each tool is calibrated on the calibration split alone and evaluated on the test split; *fused* is a logistic
-combination of both logits fitted on the calibration split.
+## 3. The AI tool: NVIDIA VISTA3D's case score
+VISTA3D segments the liver (label 1) and hepatic tumours (label 26) in 3D. Its **case score** is the mean of the
+top-k smoothed tumour probabilities inside the liver (k = 0.1 ml). It is calibrated on the calibration split and
+evaluated on the test split. (If a research second reader is plugged in, it appears here as well.)
 """),
     code("""
 cm = load_json(RUN / "calibration" / "calibration_metrics.json")
@@ -146,30 +148,32 @@ pd.DataFrame([{"tool": k, "n": r["n"], "with tumour": r["n_pos"], "AUROC": r["au
 """),
     code("""
 v = [r for r in test if r["confidence"].get("vlm_probability_raw") is not None]
+if not v:
+    print("one model, no second reader - nothing to compare")
 agree = pd.DataFrame([{"case": r["case_id"], "tumour": r["reference"]["tumour_present"],
                        "segmenter": r["confidence"]["tumour_probability_raw"],
-                       "medgemma": r["confidence"]["vlm_probability_raw"],
+                       "second_reader": r["confidence"]["vlm_probability_raw"],
                        "used": r["confidence"]["tumour_probability"],
                        "disagree": r["confidence"].get("tools_disagree", False),
                        "final_answer": (r.get("vlm") or {}).get("guard", {}).get("final_answer"),
                        "unverified_sizes": len((r.get("vlm") or {}).get("guard", {}).get("unverified_sizes", []))}
                       for r in v])
-print(f"{len(v)}/{len(test)} test cases have a MedGemma read; tools disagree on {int(agree.disagree.sum())}")
 if len(agree):
+    print(f"{len(v)}/{len(test)} test cases have a second read; tools disagree on {int(agree.disagree.sum())}")
     err = (agree.used >= cfg["triage"]["suggest_threshold"]) != agree.tumour
     print("AI error rate where the tools agree / disagree:", err.groupby(agree.disagree).mean().round(3).to_dict())
-    print("MedGemma texts that quote sizes the measurement tool did not produce:", int((agree.unverified_sizes > 0).sum()))
+    print("Second-reader texts that quote sizes the measurement tool did not produce:", int((agree.unverified_sizes > 0).sum()))
 agree.round(3)
 """),
     code("""
-plots.ai_tools_figure(records, RUN / "figures" / "ai_tools.png", cm, plots.tool_names(cfg))
-plt.imshow(plt.imread(RUN / "figures" / "ai_tools.png")); plt.axis("off"); plt.gcf().set_size_inches(12, 5)
+if plots.ai_tools_figure(records, RUN / "figures" / "ai_tools.png", cm, plots.tool_names(cfg)):
+    plt.imshow(plt.imread(RUN / "figures" / "ai_tools.png")); plt.axis("off"); plt.gcf().set_size_inches(12, 5)
 """),
     md("""
 ## 3b. Confidence calibration (Step 2)
 The score the agent uses is selected on the **calibration split** by 5-fold cross-validated NLL among: no
-calibration, temperature scaling, Platt scaling of the segmenter score, Platt scaling of MedGemma's P(yes), and the
-fused logistic model. The winner is refitted on the full calibration split and evaluated once on the test split.
+calibration, temperature scaling and Platt scaling of the segmenter score (plus the second-reader and fused models
+when a research second reader is plugged in). The winner is refitted on the full calibration split and evaluated once on the test split.
 Intervals are 95 % bootstrap intervals over test cases.
 """),
     code("""
@@ -277,8 +281,8 @@ tab.unstack(0)
 plots.learning_curve_figure(lc, exp["results"], cfg, RUN / "figures" / "learning_curve.png")
 plt.imshow(plt.imread(RUN / "figures" / "learning_curve.png")); plt.axis("off"); plt.gcf().set_size_inches(13, 7)
 """),
-    md("## 7. What did the agent do?\nEvery first read is a traced plan of tool calls (including `vlm_second_read`) with "
-       "preconditions enforced by the runner."),
+    md("## 7. What did the agent do?\nEvery first read is a traced plan of tool calls with preconditions enforced by "
+       "the runner."),
     code("""
 steps = []
 for f in sorted((RUN / "traces").glob("*.json")):
@@ -292,54 +296,60 @@ steps.groupby("tool", sort=False).agg(calls=("ms", "size"), median_ms=("ms", "me
 """),
     md("""
 ## Limitations
-* **Single dataset.** All numbers are on LiTS17 (131 CTs from several centres, mostly with tumour); there is no
-  external test set yet.
-* **MedGemma is used zero-shot** (no fine-tuning on LiTS) and sees 16 slices of a volume. Its free text is shown
-  as unverified, never used for measurements, and checked for sizes the measurement tool did not produce.
+* **Single dataset, seen by the segmenter.** All numbers are on LiTS17 (131 CTs from several centres, mostly with
+  tumour), and VISTA3D's training data include these volumes (MSD Task 03). Segmentation quality and AUROC here
+  are optimistic; an external test set is needed to evaluate the segmenter. Calibration and the reader
+  experiments are still split correctly (calib vs test).
+* **One pretrained model, used as published.** VISTA3D is not fine-tuned here; its weights are for
+  non-commercial research use (NVIDIA NCLS v1).
 * **LiTS case-level imbalance.** Most LiTS volumes contain tumour, so case-level specificity and calibration of the
   negative class rest on few cases; report intervals, and consider `confidence.target_min_tumour_ml` for an
   "actionable burden" definition.
 * **Simulated readers** follow a parametric behaviour model (own read -> trust curve -> lapses). Real readers will
   differ - the next step is the pilot with mentor radiologists.
-* **Small calibration/burn-in sets** (25-35 cases) make learned thresholds noisy; the policy therefore only
+* **Small calibration/burn-in sets** (about 65 cases) make learned thresholds noisy; the policy therefore only
   personalises when the expected improvement clears a margin, and the learning curve shows how this stabilises.
 """),
 ]
 
 COLAB = [
     md("""
-# ReaderAdapt-Liver on LiTS17: ViT-UNETR segmenter + MedGemma 1.5 second reader (Colab, GPU)
+# ReaderAdapt-Liver on LiTS17 with one pretrained model: NVIDIA VISTA3D (Colab, GPU)
 
-**Runtime -> Change runtime type -> GPU** (T4 works; L4 / A100 is about 3x faster).
+**Runtime -> Change runtime type -> GPU** (T4 works; L4 / A100 is faster).
 
-Two Colab secrets (key icon on the left, *Notebook access* on):
+One Colab secret (key icon on the left, *Notebook access* on):
 
 | Secret | Why | Where to get it |
 |---|---|---|
 | `KAGGLE_API_TOKEN` (or `KAGGLE_USERNAME` + `KAGGLE_KEY`) | download the two LiTS17 datasets | kaggle.com -> Settings -> API -> Create New Token |
-| `HF_TOKEN` | download MedGemma 1.5 4B | huggingface.co -> Settings -> Access Tokens (read). First open https://huggingface.co/google/medgemma-1.5-4b-it and accept the Health AI Developer Foundations terms |
 
-Pipeline: download LiTS (both Kaggle parts) -> notebook-compatible split (same as the ViT-UNETR liver notebook)
--> train the 3-class ViT-UNETR 2.5D -> segment + measure the 51 held-out CTs -> MedGemma second read ->
-calibration (segmenter / MedGemma / fused) -> agentic first read + reports -> reader experiment -> figures ->
-**website**.
+The segmentation model, **NVIDIA VISTA3D** (MONAI), is downloaded from Hugging Face (`MONAI/VISTA3D-HF`,
+~870 MB) without a token and used as published - **nothing is trained**. It segments the liver and hepatic
+tumours in 3D. Its weights are for non-commercial research use (NVIDIA NCLS v1).
 
-Rough times on a T4: download 10-15 min, training 12 epochs ~60-90 min, segmentation ~10 min,
-MedGemma ~1 min per case (~50 min). Set `QUICK = True` below for a ~40-case first look.
+Pipeline: download LiTS (both Kaggle parts) -> calib / test split -> fetch VISTA3D -> segment + measure every
+CT -> calibration -> agentic first read + reports -> reader experiment -> figures -> **website**.
+
+Note: VISTA3D's training data include MSD Task 03, built from the LiTS training volumes, so its segmentation
+quality on LiTS is optimistic (not a held-out evaluation).
+
+Rough times on a T4: download 10-15 min; VISTA3D about 1-2 min per CT with the flip pass (~2-3 h for all 131).
+Set `QUICK = True` below for a ~40-case first look without the flip pass.
 """),
     code("""
 # 1. Code + dependencies
 REPO_URL = "https://github.com/AIVIETNAM-AIO-khaisiubeo/ReaderAdapt-Liver.git"
-BRANCH = "lits-medgemma"          # use "main" once the pull request is merged
+BRANCH = "vista3d-single-model"   # use "main" once the pull requests are merged
 import os
 if not os.path.exists("ReaderAdapt-Liver"):
     !git clone -q -b $BRANCH $REPO_URL
 %cd ReaderAdapt-Liver
 !git pull -q
-!pip install -q -r requirements.txt -r requirements-deep.txt -r requirements-vlm.txt
+!pip install -q -r requirements.txt -r requirements-deep.txt
 """),
     code("""
-# 2. Secrets -> environment (KAGGLE_API_TOKEN / KAGGLE_USERNAME + KAGGLE_KEY, HF_TOKEN)
+# 2. Secrets -> environment (KAGGLE_API_TOKEN, or KAGGLE_USERNAME + KAGGLE_KEY; HF_TOKEN optional)
 import os
 from google.colab import userdata
 for k in ("KAGGLE_API_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY", "HF_TOKEN"):
@@ -349,61 +359,56 @@ for k in ("KAGGLE_API_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY", "HF_TOKEN"):
             os.environ[k] = v
     except Exception:
         pass
-print({k: (k in os.environ) for k in ("KAGGLE_API_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY", "HF_TOKEN")})
+print({k: (k in os.environ) for k in ("KAGGLE_API_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY")})
 import torch
 print(torch.__version__, "| GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NONE - change the runtime!")
 """),
     code("""
 # 3. Run configuration
 import yaml, torch
-QUICK = False                     # True: proportional ~40-case subset, fewer epochs, for a fast first look
+QUICK = False                     # True: proportional ~40-case subset, no flip pass, for a fast first look
 cfg = yaml.safe_load(open("configs/lits.yaml"))
-ampere = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
-cfg["segmenter"]["epochs"] = 30 if ampere else 12
+big_gpu = torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 30e9
+cfg["segmenter"]["sw_batch_size"] = 4 if big_gpu else 1
 if QUICK:
-    cfg["run_name"], cfg["data"]["max_cases"], cfg["segmenter"]["epochs"] = "lits_quick", 40, 6
-warm = "checkpoints/vitunetr_liver_2class.pt"   # optional, see checkpoints/README.md
-cfg["segmenter"]["init_from"] = warm if os.path.exists(warm) else None
+    cfg["run_name"], cfg["data"]["max_cases"], cfg["inference"]["tta_flip"] = "lits_quick", 40, False
 yaml.safe_dump(cfg, open("configs/lits_colab.yaml", "w"), sort_keys=False)
 RUN = f"outputs/{cfg['run_name']}"
-print("run:", RUN, "| epochs:", cfg["segmenter"]["epochs"], "| warm start:", cfg["segmenter"]["init_from"],
-      "| MedGemma:", cfg["vlm"]["model_id"])
+print("run:", RUN, "| segmenter: NVIDIA VISTA3D (pretrained) | flip pass:", cfg["inference"]["tta_flip"])
 """),
     code("""
 # 4. LiTS17 from Kaggle (part 1 = segmentations + volume_pt1-5, part 2 = the remaining volumes), then the split
 !python -m radagent download --config configs/lits_colab.yaml
 !python -m radagent data --config configs/lits_colab.yaml
 """),
-    code("# 5. Train the segmentation tool (3-class ViT-UNETR 2.5D: background / liver / tumour)\n"
-         "!python -m radagent train --config configs/lits_colab.yaml"),
-    code("# 6. Segment + measure the held-out CTs (flip-TTA x MC-dropout passes, original resolution)\n"
+    code("# 5. Fetch the pretrained NVIDIA VISTA3D weights (~870 MB, cached) and write the model card - no training\n"
+         "!python -m radagent model --config configs/lits_colab.yaml"),
+    code("# 6. Segment + measure every CT with VISTA3D (liver + hepatic tumour; CT and its mirror image)\n"
          "!python -m radagent infer --config configs/lits_colab.yaml"),
-    code("# 7. MedGemma 1.5 second read of every held-out CT (downloads ~8 GB of weights the first time)\n"
-         "!python -m radagent vlm --config configs/lits_colab.yaml"),
     code("""
-# 8. Calibration, agentic first read + reports, reader experiment, figures
+# 7. Calibration, agentic first read + reports, reader experiment, figures
 !python -m radagent calibrate --config configs/lits_colab.yaml
 !python -m radagent first-read --config configs/lits_colab.yaml
 !python -m radagent simulate --config configs/lits_colab.yaml
 !python -m radagent figures --config configs/lits_colab.yaml
 """),
     code("""
-# 9. One agent trace and its report
+# 8. One agent trace and its report
 !python -m radagent agent --config configs/lits_colab.yaml
 import glob
 print(open(sorted(glob.glob(f"{RUN}/reports/*.txt"))[0]).read())
 """),
     code("""
 from IPython.display import Image, display
-for f in ("ai_tools.png", "calibration_reliability.png", "segmentation_quality.png", "policy_comparison.png"):
+for f in ("calibration_reliability.png", "segmentation_quality.png", "policy_comparison.png"):
     if os.path.exists(f"{RUN}/figures/{f}"):
         display(Image(f"{RUN}/figures/{f}", width=900))
 """),
     md("""
-## 10. Open the website
+## 9. Open the website
 
 **Option A - straight from Colab (everything works, including *Recompute from the CT file*, because the CTs, the
-GPU and the models are here).** The cell starts the website and prints a public `trycloudflare.com` link (a free
+GPU and the model are here).** The cell starts the website and prints a public `trycloudflare.com` link (a free
 Cloudflare quick tunnel; anyone with the link can open it while the cell runs - stop the cell to close it).
 """),
     code("""
@@ -431,13 +436,13 @@ finally:
     tunnel.terminate(); app.terminate()
 """),
     md("""
-**Option B - on your own computer.** Download the run (without the training-slice cache), unzip it into the
-`outputs/` folder of your local copy of the repository and start
-`python -m streamlit run app/streamlit_app.py -- --run outputs/lits`. Everything except *Recompute from the CT file*
-works without a GPU (recompute needs the LiTS files, PyTorch and, for MedGemma, a GPU).
+**Option B - on your own computer.** Download the run, unzip it into the `outputs/` folder of your local copy of
+the repository and start `python -m streamlit run app/streamlit_app.py -- --run outputs/lits`. Everything except
+*Recompute from the CT file* works without a GPU (recompute needs the LiTS files, PyTorch, MONAI and the VISTA3D
+weights; a GPU is recommended).
 """),
     code("""
-!cd outputs && zip -qr ../lits_run.zip {cfg['run_name']} -x "{cfg['run_name']}/cache/train_slices/*"
+!cd outputs && zip -qr ../lits_run.zip {cfg['run_name']}
 !ls -lh lits_run.zip
 from google.colab import files
 files.download("lits_run.zip")

@@ -3,9 +3,9 @@
 Commands
   download    download both LiTS parts from Kaggle with kagglehub (cached afterwards)
   data        pair CTs with masks and write the case manifest + split
-  train       train the segmentation tool (ViT-UNETR by default; GPU)
-  infer       run the segmenter (segment + measure) on the calib/test cases
-  vlm         run the MedGemma second read on the calib/test cases (GPU)
+  model       fetch the pretrained NVIDIA VISTA3D weights and write the model card (nothing is trained)
+  infer       run VISTA3D (segment + measure) on the calib/test cases (GPU recommended)
+  vlm         optional second reader (off by default: vlm.backend none)
   calibrate   fit the confidence calibrator on the calib split, evaluate on test
   first-read  run the agent (plan -> tools -> report) on every evaluation case
   simulate    reader experiment: universal vs reader-specific vs deferral policies
@@ -23,14 +23,14 @@ from radagent.config import load_config
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="radagent", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["download", "data", "train", "infer", "vlm", "calibrate", "first-read",
+    ap.add_argument("command", choices=["download", "data", "model", "infer", "vlm", "calibrate", "first-read",
                                         "simulate", "figures", "all", "agent"])
     ap.add_argument("--config", default="configs/lits.yaml")
     ap.add_argument("--force", action="store_true", help="infer / vlm: recompute cached results")
     ap.add_argument("--seeds", type=int, default=None, help="simulate: number of seeds")
     ap.add_argument("--planner", choices=["rule", "llm"], default=None)
     ap.add_argument("--case", default=None, help="agent: case id (default: first test case)")
-    ap.add_argument("--recompute", action="store_true", help="agent: re-run segmenter and MedGemma on the CT file")
+    ap.add_argument("--recompute", action="store_true", help="agent: re-run the segmenter on the CT file")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
 
@@ -40,8 +40,8 @@ def main(argv=None) -> None:
         P.step_download(cfg)
     elif args.command == "data":
         P.step_data(cfg)
-    elif args.command == "train":
-        P.step_train(cfg)
+    elif args.command == "model":
+        P.step_model(cfg)
     elif args.command == "infer":
         P.step_infer(cfg, force=args.force)
     elif args.command == "vlm":

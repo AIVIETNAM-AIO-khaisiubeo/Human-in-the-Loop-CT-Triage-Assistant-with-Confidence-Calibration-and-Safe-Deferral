@@ -22,31 +22,15 @@ from radagent.store import RunStore
 from radagent.triage import triage as _triage
 
 
-_SIG_CACHE: dict = {}
-
-
 def model_signature(cfg: dict) -> str:
-    """Content-based id of the segmenter checkpoint (survives copying/zipping, unlike mtimes)."""
-    import hashlib
-
-    from radagent.models import checkpoint_path
-
-    if cfg["segmenter"]["backend"] == "plugin":
-        return f"plugin:{cfg['segmenter'].get('plugin')}:{cfg['preprocess']['img_size']}"
-    p = checkpoint_path(cfg)
-    if not p.exists():
-        return f"{cfg['segmenter']['backend']}:missing"
-    st = p.stat()
-    key = (str(p.resolve()), st.st_size, st.st_mtime)
-    if key not in _SIG_CACHE:
-        h = hashlib.sha1()
-        with open(p, "rb") as f:
-            h.update(f.read(1 << 20))
-            if st.st_size > (2 << 20):
-                f.seek(-(1 << 20), 2)
-                h.update(f.read(1 << 20))
-        _SIG_CACHE[key] = h.hexdigest()[:12]
-    return f"{cfg['segmenter']['backend']}:{st.st_size}:{_SIG_CACHE[key]}:{cfg['preprocess']['img_size']}"
+    """Identity of the segmenter and its settings; a change invalidates cached results."""
+    sc = cfg["segmenter"]
+    size = cfg["preprocess"]["img_size"]
+    if sc["backend"] == "plugin":
+        return f"plugin:{sc.get('plugin')}:{size}"
+    tta = int(bool(cfg["inference"].get("tta_flip", True)))
+    return (f"{sc['backend']}:{sc.get('hf_repo')}@{sc.get('hf_revision') or 'main'}:{sc.get('resample_mm')}mm:"
+            f"roi{sc.get('roi_size')}:ov{sc.get('overlap')}:tta{tta}:{size}")
 
 
 @dataclass
@@ -158,7 +142,7 @@ def _vlm_summary(v: dict) -> dict:
 
 
 def vlm_second_read(ctx: CaseContext) -> dict:
-    """MedGemma (or another VLM adapter) reads axial slices through the predicted liver."""
+    """Optional second reader (a VLM adapter, off by default) reads axial slices through the predicted liver."""
     from radagent.vlm import vlm_enabled, vlm_signature
 
     vcfg = ctx.cfg["vlm"]
@@ -173,8 +157,8 @@ def vlm_second_read(ctx: CaseContext) -> dict:
         ctx.record["vlm"] = {**cached, "source": "cache"}
         return _vlm_summary(ctx.record["vlm"])
     if ctx.vlm_mode != "compute":
-        ctx.record["vlm"] = {"status": "unavailable", "reason": "no stored MedGemma read for this case - run "
-                                                                 "`python -m radagent vlm` on a GPU"}
+        ctx.record["vlm"] = {"status": "unavailable", "reason": "no stored second read for this case - run "
+                                                                 "`python -m radagent vlm`"}
         return _vlm_summary(ctx.record["vlm"])
     from radagent.geometry import load_volume
     from radagent.vlm.ct_prep import liver_z_range, select_slices, thumbnail, window_rgb
@@ -280,17 +264,18 @@ class Tool:
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("load_study", load_study, "Load the CT study and its header geometry (orientation, voxel spacing)."),
     Tool("segment_liver_tumour", segment_liver_tumour,
-         "Run the segmentation tool (liver + tumour) with stochastic passes for uncertainty.", ("load_study",)),
+         "Run the segmentation tool (NVIDIA VISTA3D: liver + hepatic tumour) with test-time-augmentation "
+         "passes for uncertainty.", ("load_study",)),
     Tool("measure_findings", measure_findings,
          "Measure liver and lesion volumes/diameters at original resolution from the voxel spacing.",
          ("segment_liver_tumour",)),
     Tool("quality_check", quality_check, "Run automatic quality-control checks on the first read.", ("measure_findings",)),
     Tool("vlm_second_read", vlm_second_read,
-         "Ask the vision-language model (MedGemma) for an independent read of slices through the liver: "
-         "its probability that a liver tumour is present and a short unverified description.",
+         "Ask the optional second reader (if configured) for an independent read of slices through the "
+         "liver: its probability that a liver tumour is present and a short unverified description.",
          ("measure_findings",)),
     Tool("estimate_confidence", estimate_confidence,
-         "Combine the segmenter score and the vision-language read into one calibrated tumour probability "
+         "Turn the segmenter score (and a second read, if any) into one calibrated tumour probability "
          "with an uncertainty estimate.",
          ("segment_liver_tumour", "vlm_second_read")),
     Tool("triage_case", triage_case, "Assign a worklist priority and triage category.",
